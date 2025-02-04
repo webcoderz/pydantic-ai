@@ -134,7 +134,14 @@ class ModelSettings(TypedDict, total=False):
     """Whether to require a specific tool to be used.
 
     Supported by:
+
+    * Gemini
+    * Anthropic
     * OpenAI
+    * Groq
+    * Cohere
+    * Mistral
+    
     """
 
 def merge_model_settings(base: ModelSettings | None, overrides: ModelSettings | None) -> ModelSettings | None:
