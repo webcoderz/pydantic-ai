@@ -78,7 +78,6 @@ docs-upload = [
     "pydantic>=2.10.1",
 ]
 
-
 [tool.hatch.build.targets.wheel]
 only-include = ["/README.md"]
 
