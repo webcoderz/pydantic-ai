@@ -186,7 +186,6 @@ class GroqAgentModel(AgentModel):
         # standalone function to make it easier to override
         tool_choice = model_settings.get('tool_choice', None)
 
-        # If the user did NOT provide a tool_choice, figure it out from our fallback logic:
         if tool_choice is None:
             if not self.tools:
                 tool_choice = None
