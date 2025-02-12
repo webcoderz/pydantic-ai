@@ -57,9 +57,6 @@ See [the Gemini API docs](https://ai.google.dev/gemini-api/docs/models/gemini#mo
 class GeminiModelSettings(ModelSettings):
     """Settings used for a Gemini model request."""
 
-    tool_choice: Literal['none', 'required', 'auto']
-    """Whether to require a specific tool to be used."""
-
     # This class is a placeholder for any future gemini-specific settings
 
 

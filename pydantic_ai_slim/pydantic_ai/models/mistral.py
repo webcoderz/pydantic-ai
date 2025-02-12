@@ -87,10 +87,6 @@ Since [the Mistral docs](https://docs.mistral.ai/getting-started/models/models_o
 class MistralModelSettings(ModelSettings):
     """Settings used for a Mistral model request."""
 
-    tool_choice: Literal['none', 'required', 'auto', 'any']
-    """Whether to require a specific tool to be used."""
-    
-
     # This class is a placeholder for any future mistral-specific settings
 
 
