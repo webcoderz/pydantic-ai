@@ -185,8 +185,8 @@ class OpenAIAgentModel(AgentModel):
     async def _completions_create(
         self, messages: list[ModelMessage], stream: bool, model_settings: OpenAIModelSettings
     ) -> chat.ChatCompletion | AsyncStream[ChatCompletionChunk]:
-        # standalone function to make it easier to override
-        tool_choice = model_settings.get('tool_choice', None)
+        
+        tool_choice: Literal['none', 'required', 'auto'] | None = model_settings.get('tool_choice', None)
 
         if tool_choice is None:
             if not self.tools:
