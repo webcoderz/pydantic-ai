@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from json import JSONDecodeError, loads as json_loads
 from typing import Any, Literal, Union, cast, overload
 
+
 from httpx import AsyncClient as AsyncHTTPClient
 from typing_extensions import assert_never
 
@@ -81,6 +82,9 @@ Since [the Anthropic docs](https://docs.anthropic.com/en/docs/about-claude/model
 
 class AnthropicModelSettings(ModelSettings):
     """Settings used for an Anthropic model request."""
+
+    tool_choice: Union[Literal["auto", "any"], str]
+    """Whether to require a specific tool to be used."""
 
     anthropic_metadata: MetadataParam
     """An object describing metadata about the request.

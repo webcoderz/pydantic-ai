@@ -75,6 +75,10 @@ CohereModelName = Union[NamedCohereModels, str]
 class CohereModelSettings(ModelSettings):
     """Settings used for a Cohere model request."""
 
+    tool_choice: Literal['none', 'required', 'auto']
+    """Whether to require a specific tool to be used."""
+    
+
     # This class is a placeholder for any future cohere-specific settings
 
 

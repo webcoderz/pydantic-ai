@@ -57,6 +57,9 @@ OpenAISystemPromptRole = Literal['system', 'developer', 'user']
 class OpenAIModelSettings(ModelSettings):
     """Settings used for an OpenAI model request."""
 
+    tool_choice: Literal['none', 'required', 'auto']
+    """Whether to require a specific tool to be used."""
+    
     # This class is a placeholder for any future openai-specific settings
 
 
