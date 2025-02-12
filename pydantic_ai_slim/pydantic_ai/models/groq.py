@@ -188,7 +188,7 @@ class GroqAgentModel(AgentModel):
         self, messages: list[ModelMessage], stream: bool, model_settings: GroqModelSettings
     ) -> chat.ChatCompletion | AsyncStream[ChatCompletionChunk]:
         # standalone function to make it easier to override
-        tool_choice: Literal['none', 'required', 'auto'] | None = model_settings.get('tool_choice', None)
+        tool_choice: Literal['none', 'required', 'auto'] | None = getattr(model_settings, 'tool_choice', None)
 
         if tool_choice is None:
             if not self.tools:

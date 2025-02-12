@@ -59,7 +59,7 @@ class OpenAIModelSettings(ModelSettings):
 
     tool_choice: Literal['none', 'required', 'auto']
     """Whether to require a specific tool to be used."""
-    
+
     # This class is a placeholder for any future openai-specific settings
 
 
@@ -189,7 +189,7 @@ class OpenAIAgentModel(AgentModel):
         self, messages: list[ModelMessage], stream: bool, model_settings: OpenAIModelSettings
     ) -> chat.ChatCompletion | AsyncStream[ChatCompletionChunk]:
         
-        tool_choice: Literal['none', 'required', 'auto'] | None = model_settings.get('tool_choice', None)
+        tool_choice: Literal['none', 'required', 'auto'] | None = getattr(model_settings, 'tool_choice', None)
 
         if tool_choice is None:
             if not self.tools:
