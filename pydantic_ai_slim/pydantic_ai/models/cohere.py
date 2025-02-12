@@ -75,7 +75,7 @@ CohereModelName = Union[NamedCohereModels, str]
 class CohereModelSettings(ModelSettings):
     """Settings used for a Cohere model request."""
 
-    tool_choice: Literal['none', 'required', 'auto']
+    tool_choice: Literal['REQUIRED', 'NONE']
     """Whether to require a specific tool to be used."""
     
 
@@ -170,6 +170,29 @@ class CohereAgentModel(AgentModel):
         response = await self._chat(messages, cast(CohereModelSettings, model_settings or {}))
         return self._process_response(response), _map_usage(response)
 
+    def _get_tool_choice(self, model_settings: CohereModelSettings) -> Literal['REQUIRED', 'NONE'] | None:
+        """Determine the tool_choice setting for the model.
+
+        Allowed values in model_settings:
+        - 'REQUIRED': The model must use at least one tool.
+        - 'NONE': The model is forced not to use a tool.
+        If not provided, the model is free to choose:
+        - If no tools are available, leave unspecified.
+        - If text responses are disallowed, force tool usage ('REQUIRED').
+        - If text responses are allowed, leave unspecified (free to choose).
+        """
+        tool_choice: Literal['REQUIRED', 'NONE'] | None = getattr(model_settings, 'tool_choice', None)
+
+        if tool_choice is None:
+            if not self.tools:
+                tool_choice = None
+            elif not self.allow_text_result:
+                tool_choice = 'REQUIRED'
+            else:
+                tool_choice = None
+
+        return tool_choice
+
     async def _chat(
         self,
         messages: list[ModelMessage],
@@ -180,6 +203,7 @@ class CohereAgentModel(AgentModel):
             model=self.model_name,
             messages=cohere_messages,
             tools=self.tools or OMIT,
+            tool_choice=self._get_tool_choice(model_settings) or OMIT,
             max_tokens=model_settings.get('max_tokens', OMIT),
             temperature=model_settings.get('temperature', OMIT),
             p=model_settings.get('top_p', OMIT),

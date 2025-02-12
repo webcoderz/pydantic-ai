@@ -185,10 +185,13 @@ class OpenAIAgentModel(AgentModel):
     ) -> chat.ChatCompletion:
         pass
 
-    async def _completions_create(
-        self, messages: list[ModelMessage], stream: bool, model_settings: OpenAIModelSettings
-    ) -> chat.ChatCompletion | AsyncStream[ChatCompletionChunk]:
-        
+    def _get_tool_choice(self, model_settings: OpenAIModelSettings) ->  Literal['none', 'required', 'auto'] | None:
+        """Get tool choice for the model.
+
+        - "auto": Default mode. Model decides if it uses the tool or not.
+        - "none": Prevents tool use.
+        - "required": Forces tool use.
+        """
         tool_choice: Literal['none', 'required', 'auto'] | None = getattr(model_settings, 'tool_choice', None)
 
         if tool_choice is None:
@@ -199,6 +202,13 @@ class OpenAIAgentModel(AgentModel):
             else:
                 tool_choice = 'auto'
 
+        return tool_choice
+
+
+    async def _completions_create(
+        self, messages: list[ModelMessage], stream: bool, model_settings: OpenAIModelSettings
+    ) -> chat.ChatCompletion | AsyncStream[ChatCompletionChunk]:
+        
         openai_messages = list(chain(*(self._map_message(m) for m in messages)))
 
         return await self.client.chat.completions.create(
@@ -207,7 +217,7 @@ class OpenAIAgentModel(AgentModel):
             n=1,
             parallel_tool_calls=model_settings.get('parallel_tool_calls', NOT_GIVEN),
             tools=self.tools or NOT_GIVEN,
-            tool_choice=tool_choice or NOT_GIVEN,
+            tool_choice=self._get_tool_choice(model_settings) or NOT_GIVEN,
             stream=stream,
             stream_options={'include_usage': True} if stream else NOT_GIVEN,
             max_tokens=model_settings.get('max_tokens', NOT_GIVEN),
