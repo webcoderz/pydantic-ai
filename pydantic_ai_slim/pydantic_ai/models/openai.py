@@ -5,10 +5,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from itertools import chain
-from typing import Literal, Union, cast, overload
-
+from typing import Literal, Union, cast, overload, Any, Dict
 from httpx import AsyncClient as AsyncHTTPClient
-from typing_extensions import assert_never
+from typing_extensions import TypedDict, assert_never
 
 from .. import UnexpectedModelBehavior, _utils, usage
 from .._utils import guard_tool_call_id as _guard_tool_call_id
@@ -53,11 +52,19 @@ allows this model to be used more easily with other model types (ie, Ollama, Dee
 
 OpenAISystemPromptRole = Literal['system', 'developer', 'user']
 
+class ChatCompletionNamedToolChoiceParam(TypedDict):
+    type: Literal["named"]
+    name: str
+    parameters: Dict[str, Any]
+
 
 class OpenAIModelSettings(ModelSettings):
     """Settings used for an OpenAI model request."""
 
-    tool_choice: Literal['none', 'required', 'auto']
+    tool_choice: Union[
+        Literal["none", "auto", "required"],
+        ChatCompletionNamedToolChoiceParam
+    ]
     """Whether to require a specific tool to be used."""
 
     # This class is a placeholder for any future openai-specific settings

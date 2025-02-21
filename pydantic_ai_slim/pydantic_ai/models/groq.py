@@ -5,10 +5,10 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from itertools import chain
-from typing import Literal, cast, overload
+from typing import Literal, Dict, Any, cast, overload
 
 from httpx import AsyncClient as AsyncHTTPClient
-from typing_extensions import assert_never
+from typing_extensions import TypedDict, assert_never
 
 from .. import UnexpectedModelBehavior, _utils, usage
 from .._utils import guard_tool_call_id as _guard_tool_call_id
@@ -63,6 +63,10 @@ GroqModelName = Literal[
 See [the Groq docs](https://console.groq.com/docs/models) for a full list.
 """
 
+class ChatCompletionNamedToolChoiceParam(TypedDict):
+    type: Literal["named"]
+    name: str
+    parameters: Dict[str, Any]
 
 class GroqModelSettings(ModelSettings):
     """Settings used for a Groq model request."""

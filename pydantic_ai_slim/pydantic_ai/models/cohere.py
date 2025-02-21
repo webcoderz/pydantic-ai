@@ -3,7 +3,7 @@ from __future__ import annotations as _annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from itertools import chain
-from typing import Literal, Union, cast
+from typing import Literal, Union, Any, cast
 
 from cohere import TextAssistantMessageContentItem
 from httpx import AsyncClient as AsyncHTTPClient
@@ -71,11 +71,12 @@ NamedCohereModels = Literal[
 
 CohereModelName = Union[NamedCohereModels, str]
 
+V2ChatRequestToolChoice = Union[Literal["REQUIRED", "NONE"], Any]
 
 class CohereModelSettings(ModelSettings):
     """Settings used for a Cohere model request."""
 
-    tool_choice: Literal['REQUIRED', 'NONE']
+    tool_choice: V2ChatRequestToolChoice 
     """Whether to require a specific tool to be used."""
     
 
@@ -170,7 +171,7 @@ class CohereAgentModel(AgentModel):
         response = await self._chat(messages, cast(CohereModelSettings, model_settings or {}))
         return self._process_response(response), _map_usage(response)
 
-    def _get_tool_choice(self, model_settings: CohereModelSettings) -> Literal['REQUIRED', 'NONE'] | None:
+    def _get_tool_choice(self, model_settings: CohereModelSettings) -> V2ChatRequestToolChoice | None:
         """Determine the tool_choice setting for the model.
 
         Allowed values in model_settings:
@@ -181,7 +182,7 @@ class CohereAgentModel(AgentModel):
         - If text responses are disallowed, force tool usage ('REQUIRED').
         - If text responses are allowed, leave unspecified (free to choose).
         """
-        tool_choice: Literal['REQUIRED', 'NONE'] | None = getattr(model_settings, 'tool_choice', None)
+        tool_choice: V2ChatRequestToolChoice | None = getattr(model_settings, 'tool_choice', None)
 
         if tool_choice is None:
             if not self.tools:
