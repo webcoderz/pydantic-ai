@@ -109,9 +109,9 @@ class FunctionModel(Model):
             model_settings,
         )
 
-        assert (
-            self.stream_function is not None
-        ), 'FunctionModel must receive a `stream_function` to support streamed requests'
+        assert self.stream_function is not None, (
+            'FunctionModel must receive a `stream_function` to support streamed requests'
+        )
 
         response_stream = PeekableAsyncStream(self.stream_function(messages, agent_info))
 
@@ -120,6 +120,16 @@ class FunctionModel(Model):
             raise ValueError('Stream function must return at least one item')
 
         yield FunctionStreamedResponse(_model_name=f'function:{self.stream_function.__name__}', _iter=response_stream)
+
+    @property
+    def model_name(self) -> str:
+        """The model name."""
+        return self._model_name
+
+    @property
+    def system(self) -> str | None:
+        """The system / model provider."""
+        return self._system
 
 
 @dataclass(frozen=True)
@@ -178,6 +188,7 @@ E.g. you need to yield all text or all `DeltaToolCalls`, not mix them.
 class FunctionStreamedResponse(StreamedResponse):
     """Implementation of `StreamedResponse` for [FunctionModel][pydantic_ai.models.function.FunctionModel]."""
 
+    _model_name: str
     _iter: AsyncIterator[str | DeltaToolCalls]
     _timestamp: datetime = field(default_factory=_utils.now_utc)
 
@@ -205,7 +216,14 @@ class FunctionStreamedResponse(StreamedResponse):
                     if maybe_event is not None:
                         yield maybe_event
 
+    @property
+    def model_name(self) -> str:
+        """Get the model name of the response."""
+        return self._model_name
+
+    @property
     def timestamp(self) -> datetime:
+        """Get the timestamp of the response."""
         return self._timestamp
 
 

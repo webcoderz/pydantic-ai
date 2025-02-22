@@ -124,7 +124,7 @@ class CohereModel(Model):
             assert api_key is None, 'Cannot provide both `cohere_client` and `api_key`'
             self.client = cohere_client
         else:
-            self.client = AsyncClientV2(api_key=api_key, httpx_client=http_client)  # type: ignore
+            self.client = AsyncClientV2(api_key=api_key, httpx_client=http_client)
 
     async def request(
         self,
@@ -135,6 +135,16 @@ class CohereModel(Model):
         check_allow_model_requests()
         response = await self._chat(messages, cast(CohereModelSettings, model_settings or {}), model_request_parameters)
         return self._process_response(response), _map_usage(response)
+
+    @property
+    def model_name(self) -> CohereModelName:
+        """The model name."""
+        return self._model_name
+
+    @property
+    def system(self) -> str | None:
+        """The system / model provider."""
+        return self._system
 
     async def _chat(
         self,

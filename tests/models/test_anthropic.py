@@ -112,7 +112,7 @@ def completion_message(content: list[ContentBlock], usage: AnthropicUsage) -> An
     return AnthropicMessage(
         id='123',
         content=content,
-        model='claude-3-5-haiku-latest',
+        model='claude-3-5-haiku-123',
         role='assistant',
         stop_reason='end_turn',
         type='message',
@@ -141,13 +141,13 @@ async def test_sync_request_text_response(allow_model_requests: None):
             ModelRequest(parts=[UserPromptPart(content='hello', timestamp=IsNow(tz=timezone.utc))]),
             ModelResponse(
                 parts=[TextPart(content='world')],
-                model_name='claude-3-5-haiku-latest',
+                model_name='claude-3-5-haiku-123',
                 timestamp=IsNow(tz=timezone.utc),
             ),
             ModelRequest(parts=[UserPromptPart(content='hello', timestamp=IsNow(tz=timezone.utc))]),
             ModelResponse(
                 parts=[TextPart(content='world')],
-                model_name='claude-3-5-haiku-latest',
+                model_name='claude-3-5-haiku-123',
                 timestamp=IsNow(tz=timezone.utc),
             ),
         ]
@@ -190,7 +190,7 @@ async def test_request_structured_response(allow_model_requests: None):
                         tool_call_id='123',
                     )
                 ],
-                model_name='claude-3-5-haiku-latest',
+                model_name='claude-3-5-haiku-123',
                 timestamp=IsNow(tz=timezone.utc),
             ),
             ModelRequest(
@@ -252,7 +252,7 @@ async def test_request_tool_call(allow_model_requests: None):
                         tool_call_id='1',
                     )
                 ],
-                model_name='claude-3-5-haiku-latest',
+                model_name='claude-3-5-haiku-123',
                 timestamp=IsNow(tz=timezone.utc),
             ),
             ModelRequest(
@@ -273,7 +273,7 @@ async def test_request_tool_call(allow_model_requests: None):
                         tool_call_id='2',
                     )
                 ],
-                model_name='claude-3-5-haiku-latest',
+                model_name='claude-3-5-haiku-123',
                 timestamp=IsNow(tz=timezone.utc),
             ),
             ModelRequest(
@@ -288,7 +288,7 @@ async def test_request_tool_call(allow_model_requests: None):
             ),
             ModelResponse(
                 parts=[TextPart(content='final response')],
-                model_name='claude-3-5-haiku-latest',
+                model_name='claude-3-5-haiku-123',
                 timestamp=IsNow(tz=timezone.utc),
             ),
         ]
@@ -330,6 +330,36 @@ async def test_parallel_tool_calls(allow_model_requests: None, parallel_tool_cal
     assert get_mock_chat_completion_kwargs(mock_client)[0]['tool_choice']['disable_parallel_tool_use'] == (
         not parallel_tool_calls
     )
+
+
+@pytest.mark.skip(reason='Need to finish implementing this test')  # TODO: David to finish implementing this test
+async def test_multiple_parallel_tool_calls():  # pragma: no cover  # Need to finish the test..
+    async def retrieve_entity_info(name: str) -> str:
+        """Get the knowledge about the given entity."""
+        data = {
+            'alice': "alice is bob's wife",
+            'bob': "bob is alice's husband",
+            'charlie': "charlie is alice's son",
+            'daisy': "daisy is bob's daughter and charlie's younger sister",
+        }
+        return data[name.lower()]
+
+    system_prompt = """
+    Use the `retrieve_entity_info` tool to get information about a specific person.
+    If you need to use `retrieve_entity_info` to get information about multiple people, try
+    to call them in parallel as much as possible.
+    Think step by step and then provide a single most probable concise answer.
+    """
+
+    mock_client = MockAnthropic.create_mock([])
+    agent = Agent(
+        AnthropicModel('claude-3-5-haiku-latest', anthropic_client=mock_client),
+        system_prompt=system_prompt,
+        tools=[retrieve_entity_info],
+    )
+
+    _result = agent.run_sync('Alice, Bob, Charlie and Daisy are a family. Who is the youngest?')
+    # assert ...
 
 
 async def test_anthropic_specific_metadata(allow_model_requests: None) -> None:
