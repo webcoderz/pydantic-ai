@@ -76,9 +76,6 @@ V2ChatRequestToolChoice = Union[Literal["REQUIRED", "NONE"], Any]
 class CohereModelSettings(ModelSettings):
     """Settings used for a Cohere model request."""
 
-    tool_choice: V2ChatRequestToolChoice 
-    """Whether to require a specific tool to be used."""
-    
 
     # This class is a placeholder for any future cohere-specific settings
 

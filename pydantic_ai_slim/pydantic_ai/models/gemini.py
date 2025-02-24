@@ -57,7 +57,6 @@ FunctionCallConfigMode = Literal["ANY", "NONE", "AUTO"]
 
 class GeminiModelSettings(ModelSettings):
     """Settings used for a Gemini model request."""
-    tool_choice: FunctionCallConfigMode
     # This class is a placeholder for any future gemini-specific settings
 
 

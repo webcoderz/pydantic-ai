@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-
+from typing import Literal, Dict, Union, Any
 from httpx import Timeout
 from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
     pass
 
+class ChatCompletionNamedToolChoiceParam(TypedDict):
+    type: Literal["named"]
+    name: str
+    parameters: Dict[str, Any]
 
 class ModelSettings(TypedDict, total=False):
     """Settings to configure an LLM.
@@ -131,8 +135,22 @@ class ModelSettings(TypedDict, total=False):
     """
 
 
+    tool_choice: Union[
+        Literal["none", "auto", "required"],
+        ChatCompletionNamedToolChoiceParam
+    ]
+    """Whether to require a specific tool to be used.
 
+    Supported by:
 
+    * Gemini
+    * Anthropic
+    * OpenAI
+    * Groq
+    * Cohere
+    * Mistral
+    
+    """
 
 
 
