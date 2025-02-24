@@ -48,7 +48,6 @@ with try_import() as imports_successful:
     from mistralai.types.basemodel import Unset as MistralUnset
 
     from pydantic_ai.models.mistral import (
-        MistralAgentModel,
         MistralModel,
         MistralStreamedResponse,
     )
@@ -124,7 +123,7 @@ def completion_message(
         id='123',
         choices=[MistralChatCompletionChoice(finish_reason='stop', index=0, message=message)],
         created=1704067200 if with_created else None,  # 2024-01-01
-        model='mistral-large-latest',
+        model='mistral-large-123',
         object='chat.completion',
         usage=usage or MistralUsageInfo(prompt_tokens=1, completion_tokens=1, total_tokens=1),
     )
@@ -177,7 +176,7 @@ def func_chunk(
 
 def test_init():
     m = MistralModel('mistral-large-latest', api_key='foobar')
-    assert m.name() == 'mistral:mistral-large-latest'
+    assert m.model_name == 'mistral-large-latest'
 
 
 #####################
@@ -218,13 +217,13 @@ async def test_multiple_completions(allow_model_requests: None):
             ModelRequest(parts=[UserPromptPart(content='hello', timestamp=IsNow(tz=timezone.utc))]),
             ModelResponse(
                 parts=[TextPart(content='world')],
-                model_name='mistral-large-latest',
+                model_name='mistral-large-123',
                 timestamp=IsNow(tz=timezone.utc),
             ),
             ModelRequest(parts=[UserPromptPart(content='hello again', timestamp=IsNow(tz=timezone.utc))]),
             ModelResponse(
                 parts=[TextPart(content='hello again')],
-                model_name='mistral-large-latest',
+                model_name='mistral-large-123',
                 timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
         ]
@@ -270,19 +269,19 @@ async def test_three_completions(allow_model_requests: None):
             ModelRequest(parts=[UserPromptPart(content='hello', timestamp=IsNow(tz=timezone.utc))]),
             ModelResponse(
                 parts=[TextPart(content='world')],
-                model_name='mistral-large-latest',
+                model_name='mistral-large-123',
                 timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
             ModelRequest(parts=[UserPromptPart(content='hello again', timestamp=IsNow(tz=timezone.utc))]),
             ModelResponse(
                 parts=[TextPart(content='hello again')],
-                model_name='mistral-large-latest',
+                model_name='mistral-large-123',
                 timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
             ModelRequest(parts=[UserPromptPart(content='final message', timestamp=IsNow(tz=timezone.utc))]),
             ModelResponse(
                 parts=[TextPart(content='final message')],
-                model_name='mistral-large-latest',
+                model_name='mistral-large-123',
                 timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
         ]
@@ -397,7 +396,7 @@ async def test_request_model_structured_with_arguments_dict_response(allow_model
                         tool_call_id='123',
                     )
                 ],
-                model_name='mistral-large-latest',
+                model_name='mistral-large-123',
                 timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
             ModelRequest(
@@ -459,7 +458,7 @@ async def test_request_model_structured_with_arguments_str_response(allow_model_
                         tool_call_id='123',
                     )
                 ],
-                model_name='mistral-large-latest',
+                model_name='mistral-large-123',
                 timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
             ModelRequest(
@@ -520,7 +519,7 @@ async def test_request_result_type_with_arguments_str_response(allow_model_reque
                         tool_call_id='123',
                     )
                 ],
-                model_name='mistral-large-latest',
+                model_name='mistral-large-123',
                 timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
             ModelRequest(
@@ -1105,7 +1104,7 @@ async def test_request_tool_call(allow_model_requests: None):
                         tool_call_id='1',
                     )
                 ],
-                model_name='mistral-large-latest',
+                model_name='mistral-large-123',
                 timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
             ModelRequest(
@@ -1126,7 +1125,7 @@ async def test_request_tool_call(allow_model_requests: None):
                         tool_call_id='2',
                     )
                 ],
-                model_name='mistral-large-latest',
+                model_name='mistral-large-123',
                 timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
             ModelRequest(
@@ -1141,7 +1140,7 @@ async def test_request_tool_call(allow_model_requests: None):
             ),
             ModelResponse(
                 parts=[TextPart(content='final response')],
-                model_name='mistral-large-latest',
+                model_name='mistral-large-123',
                 timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
         ]
@@ -1245,7 +1244,7 @@ async def test_request_tool_call_with_result_type(allow_model_requests: None):
                         tool_call_id='1',
                     )
                 ],
-                model_name='mistral-large-latest',
+                model_name='mistral-large-123',
                 timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
             ModelRequest(
@@ -1266,7 +1265,7 @@ async def test_request_tool_call_with_result_type(allow_model_requests: None):
                         tool_call_id='2',
                     )
                 ],
-                model_name='mistral-large-latest',
+                model_name='mistral-large-123',
                 timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
             ModelRequest(
@@ -1287,7 +1286,7 @@ async def test_request_tool_call_with_result_type(allow_model_requests: None):
                         tool_call_id='1',
                     )
                 ],
-                model_name='mistral-large-latest',
+                model_name='mistral-large-123',
                 timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
             ModelRequest(
@@ -1634,7 +1633,7 @@ async def test_stream_tool_call_with_retry(allow_model_requests: None):
             ModelResponse(
                 parts=[TextPart(content='final response')],
                 model_name='mistral-large-latest',
-                timestamp=IsNow(tz=timezone.utc),
+                timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
         ]
     )
@@ -1668,8 +1667,8 @@ def test_generate_user_output_format_complex():
             'prop_unrecognized_type': {'type': 'customSomething'},
         }
     }
-    mam = MistralAgentModel(Mistral(api_key=''), '', False, [], [], '{schema}')
-    result = mam._generate_user_output_format([schema])  # pyright: ignore[reportPrivateUsage]
+    m = MistralModel('', json_mode_schema_prompt='{schema}')
+    result = m._generate_user_output_format([schema])  # pyright: ignore[reportPrivateUsage]
     assert result.content == (
         "{'prop_anyOf': 'Optional[str]', "
         "'prop_no_type': 'Any', "
@@ -1685,8 +1684,8 @@ def test_generate_user_output_format_complex():
 
 def test_generate_user_output_format_multiple():
     schema = {'properties': {'prop_anyOf': {'anyOf': [{'type': 'string'}, {'type': 'integer'}]}}}
-    mam = MistralAgentModel(Mistral(api_key=''), '', False, [], [], '{schema}')
-    result = mam._generate_user_output_format([schema, schema])  # pyright: ignore[reportPrivateUsage]
+    m = MistralModel('', json_mode_schema_prompt='{schema}')
+    result = m._generate_user_output_format([schema, schema])  # pyright: ignore[reportPrivateUsage]
     assert result.content == "[{'prop_anyOf': 'Optional[str]'}, {'prop_anyOf': 'Optional[str]'}]"
 
 

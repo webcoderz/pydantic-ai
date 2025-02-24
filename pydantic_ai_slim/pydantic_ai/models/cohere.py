@@ -26,8 +26,8 @@ from ..messages import (
 from ..settings import ModelSettings
 from ..tools import ToolDefinition
 from . import (
-    AgentModel,
     Model,
+    ModelRequestParameters,
     check_allow_model_requests,
 )
 
@@ -52,7 +52,7 @@ except ImportError as _import_error:
         "you can use the `cohere` optional group — `pip install 'pydantic-ai-slim[cohere]'`"
     ) from _import_error
 
-NamedCohereModels = Literal[
+LatestCohereModelNames = Literal[
     'c4ai-aya-expanse-32b',
     'c4ai-aya-expanse-8b',
     'command',
@@ -67,9 +67,15 @@ NamedCohereModels = Literal[
     'command-r-plus-08-2024',
     'command-r7b-12-2024',
 ]
-"""Latest / most popular named Cohere models."""
+"""Latest Cohere models."""
 
-CohereModelName = Union[NamedCohereModels, str]
+CohereModelName = Union[str, LatestCohereModelNames]
+"""Possible Cohere model names.
+
+Since Cohere supports a variety of date-stamped models, we explicitly list the latest models but
+allow any name in the type hints.
+See [Cohere's docs](https://docs.cohere.com/v2/docs/models) for a list of all available models.
+"""
 
 V2ChatRequestToolChoice = Union[Literal["REQUIRED", "NONE"], Any]
 
@@ -90,8 +96,10 @@ class CohereModel(Model):
     Apart from `__init__`, all methods are private or match those of the base class.
     """
 
-    model_name: CohereModelName
     client: AsyncClientV2 = field(repr=False)
+
+    _model_name: CohereModelName = field(repr=False)
+    _system: str | None = field(default='cohere', repr=False)
 
     def __init__(
         self,
@@ -112,60 +120,22 @@ class CohereModel(Model):
                 `api_key` and `http_client` must be `None`.
             http_client: An existing `httpx.AsyncClient` to use for making HTTP requests.
         """
-        self.model_name: CohereModelName = model_name
+        self._model_name: CohereModelName = model_name
         if cohere_client is not None:
             assert http_client is None, 'Cannot provide both `cohere_client` and `http_client`'
             assert api_key is None, 'Cannot provide both `cohere_client` and `api_key`'
             self.client = cohere_client
         else:
-            self.client = AsyncClientV2(api_key=api_key, httpx_client=http_client)  # type: ignore
-
-    async def agent_model(
-        self,
-        *,
-        function_tools: list[ToolDefinition],
-        allow_text_result: bool,
-        result_tools: list[ToolDefinition],
-    ) -> AgentModel:
-        check_allow_model_requests()
-        tools = [self._map_tool_definition(r) for r in function_tools]
-        if result_tools:
-            tools += [self._map_tool_definition(r) for r in result_tools]
-        return CohereAgentModel(
-            self.client,
-            self.model_name,
-            allow_text_result,
-            tools,
-        )
-
-    def name(self) -> str:
-        return f'cohere:{self.model_name}'
-
-    @staticmethod
-    def _map_tool_definition(f: ToolDefinition) -> ToolV2:
-        return ToolV2(
-            type='function',
-            function=ToolV2Function(
-                name=f.name,
-                description=f.description,
-                parameters=f.parameters_json_schema,
-            ),
-        )
-
-
-@dataclass
-class CohereAgentModel(AgentModel):
-    """Implementation of `AgentModel` for Cohere models."""
-
-    client: AsyncClientV2
-    model_name: CohereModelName
-    allow_text_result: bool
-    tools: list[ToolV2]
+            self.client = AsyncClientV2(api_key=api_key, httpx_client=http_client)
 
     async def request(
-        self, messages: list[ModelMessage], model_settings: ModelSettings | None
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
     ) -> tuple[ModelResponse, result.Usage]:
-        response = await self._chat(messages, cast(CohereModelSettings, model_settings or {}))
+        check_allow_model_requests()
+        response = await self._chat(messages, cast(CohereModelSettings, model_settings or {}), model_request_parameters)
         return self._process_response(response), _map_usage(response)
 
     def _get_tool_choice(self, model_settings: CohereModelSettings) -> V2ChatRequestToolChoice | None:
@@ -190,15 +160,26 @@ class CohereAgentModel(AgentModel):
                 tool_choice = None
 
         return tool_choice
+    @property
+    def model_name(self) -> CohereModelName:
+        """The model name."""
+        return self._model_name
+
+    @property
+    def system(self) -> str | None:
+        """The system / model provider."""
+        return self._system
 
     async def _chat(
         self,
         messages: list[ModelMessage],
         model_settings: CohereModelSettings,
+        model_request_parameters: ModelRequestParameters,
     ) -> ChatResponse:
+        tools = self._get_tools(model_request_parameters)
         cohere_messages = list(chain(*(self._map_message(m) for m in messages)))
         return await self.client.chat(
-            model=self.model_name,
+            model=self._model_name,
             messages=cohere_messages,
             tools=self.tools or OMIT,
             tool_choice=self._get_tool_choice(model_settings) or OMIT,
@@ -227,13 +208,12 @@ class CohereAgentModel(AgentModel):
                         tool_call_id=c.id,
                     )
                 )
-        return ModelResponse(parts=parts, model_name=self.model_name)
+        return ModelResponse(parts=parts, model_name=self._model_name)
 
-    @classmethod
-    def _map_message(cls, message: ModelMessage) -> Iterable[ChatMessageV2]:
+    def _map_message(self, message: ModelMessage) -> Iterable[ChatMessageV2]:
         """Just maps a `pydantic_ai.Message` to a `cohere.ChatMessageV2`."""
         if isinstance(message, ModelRequest):
-            yield from cls._map_user_message(message)
+            yield from self._map_user_message(message)
         elif isinstance(message, ModelResponse):
             texts: list[str] = []
             tool_calls: list[ToolCallV2] = []
@@ -241,7 +221,7 @@ class CohereAgentModel(AgentModel):
                 if isinstance(item, TextPart):
                     texts.append(item.content)
                 elif isinstance(item, ToolCallPart):
-                    tool_calls.append(_map_tool_call(item))
+                    tool_calls.append(self._map_tool_call(item))
                 else:
                     assert_never(item)
             message_param = AssistantChatMessageV2(role='assistant')
@@ -252,6 +232,34 @@ class CohereAgentModel(AgentModel):
             yield message_param
         else:
             assert_never(message)
+
+    def _get_tools(self, model_request_parameters: ModelRequestParameters) -> list[ToolV2]:
+        tools = [self._map_tool_definition(r) for r in model_request_parameters.function_tools]
+        if model_request_parameters.result_tools:
+            tools += [self._map_tool_definition(r) for r in model_request_parameters.result_tools]
+        return tools
+
+    @staticmethod
+    def _map_tool_call(t: ToolCallPart) -> ToolCallV2:
+        return ToolCallV2(
+            id=_guard_tool_call_id(t=t, model_source='Cohere'),
+            type='function',
+            function=ToolCallV2Function(
+                name=t.tool_name,
+                arguments=t.args_as_json_str(),
+            ),
+        )
+
+    @staticmethod
+    def _map_tool_definition(f: ToolDefinition) -> ToolV2:
+        return ToolV2(
+            type='function',
+            function=ToolV2Function(
+                name=f.name,
+                description=f.description,
+                parameters=f.parameters_json_schema,
+            ),
+        )
 
     @classmethod
     def _map_user_message(cls, message: ModelRequest) -> Iterable[ChatMessageV2]:
@@ -277,17 +285,6 @@ class CohereAgentModel(AgentModel):
                     )
             else:
                 assert_never(part)
-
-
-def _map_tool_call(t: ToolCallPart) -> ToolCallV2:
-    return ToolCallV2(
-        id=_guard_tool_call_id(t=t, model_source='Cohere'),
-        type='function',
-        function=ToolCallV2Function(
-            name=t.tool_name,
-            arguments=t.args_as_json_str(),
-        ),
-    )
 
 
 def _map_usage(response: ChatResponse) -> result.Usage:

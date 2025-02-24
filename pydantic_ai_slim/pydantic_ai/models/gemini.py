@@ -31,15 +31,15 @@ from ..messages import (
 from ..settings import ModelSettings
 from ..tools import ToolDefinition
 from . import (
-    AgentModel,
     Model,
+    ModelRequestParameters,
     StreamedResponse,
     cached_async_http_client,
     check_allow_model_requests,
     get_user_agent,
 )
 
-GeminiModelName = Literal[
+LatestGeminiModelNames = Literal[
     'gemini-1.5-flash',
     'gemini-1.5-flash-8b',
     'gemini-1.5-pro',
@@ -47,9 +47,16 @@ GeminiModelName = Literal[
     'gemini-2.0-flash-exp',
     'gemini-2.0-flash-thinking-exp-01-21',
     'gemini-exp-1206',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite-preview-02-05',
 ]
-"""Named Gemini models.
+"""Latest Gemini models."""
 
+GeminiModelName = Union[str, LatestGeminiModelNames]
+"""Possible Gemini model names.
+
+Since Gemini supports a variety of date-stamped models, we explicitly list the latest models but
+allow any name in the type hints.
 See [the Gemini API docs](https://ai.google.dev/gemini-api/docs/models/gemini#model-variations) for a full list.
 """
 
@@ -58,6 +65,8 @@ FunctionCallConfigMode = Literal["ANY", "NONE", "AUTO"]
 class GeminiModelSettings(ModelSettings):
     """Settings used for a Gemini model request."""
     # This class is a placeholder for any future gemini-specific settings
+
+    gemini_safety_settings: list[GeminiSafetySettings]
 
 
 @dataclass(init=False)
@@ -70,10 +79,12 @@ class GeminiModel(Model):
     Apart from `__init__`, all methods are private or match those of the base class.
     """
 
-    model_name: GeminiModelName
-    auth: AuthProtocol
-    http_client: AsyncHTTPClient
-    url: str
+    http_client: AsyncHTTPClient = field(repr=False)
+
+    _model_name: GeminiModelName = field(repr=False)
+    _auth: AuthProtocol | None = field(repr=False)
+    _url: str | None = field(repr=False)
+    _system: str | None = field(default='google-gla', repr=False)
 
     def __init__(
         self,
@@ -94,121 +105,97 @@ class GeminiModel(Model):
                 docs [here](https://ai.google.dev/gemini-api/docs/quickstart?lang=rest#make-first-request),
                 `model` is substituted with the model name, and `function` is added to the end of the URL.
         """
-        self.model_name = model_name
+        self._model_name = model_name
         if api_key is None:
             if env_api_key := os.getenv('GEMINI_API_KEY'):
                 api_key = env_api_key
             else:
                 raise exceptions.UserError('API key must be provided or set in the GEMINI_API_KEY environment variable')
-        self.auth = ApiKeyAuth(api_key)
         self.http_client = http_client or cached_async_http_client()
-        self.url = url_template.format(model=model_name)
+        self._auth = ApiKeyAuth(api_key)
+        self._url = url_template.format(model=model_name)
 
-    async def agent_model(
-        self,
-        *,
-        function_tools: list[ToolDefinition],
-        allow_text_result: bool,
-        result_tools: list[ToolDefinition],
-    ) -> GeminiAgentModel:
-        check_allow_model_requests()
-        return GeminiAgentModel(
-            http_client=self.http_client,
-            model_name=self.model_name,
-            auth=self.auth,
-            url=self.url,
-            function_tools=function_tools,
-            allow_text_result=allow_text_result,
-            result_tools=result_tools,
-        )
+    @property
+    def auth(self) -> AuthProtocol:
+        assert self._auth is not None, 'Auth not initialized'
+        return self._auth
 
-    def name(self) -> str:
-        return f'google-gla:{self.model_name}'
-
-
-class AuthProtocol(Protocol):
-    """Abstract definition for Gemini authentication."""
-
-    async def headers(self) -> dict[str, str]: ...
-
-
-@dataclass
-class ApiKeyAuth:
-    """Authentication using an API key for the `X-Goog-Api-Key` header."""
-
-    api_key: str
-
-    async def headers(self) -> dict[str, str]:
-        # https://cloud.google.com/docs/authentication/api-keys-use#using-with-rest
-        return {'X-Goog-Api-Key': self.api_key}
-
-
-@dataclass(init=False)
-class GeminiAgentModel(AgentModel):
-    """Implementation of `AgentModel` for Gemini models."""
-
-    http_client: AsyncHTTPClient
-    model_name: GeminiModelName
-    auth: AuthProtocol
-    tools: _GeminiTools | None
-    tool_config: _GeminiToolConfig | None
-    url: str
-
-    def __init__(
-        self,
-        http_client: AsyncHTTPClient,
-        model_name: GeminiModelName,
-        auth: AuthProtocol,
-        url: str,
-        function_tools: list[ToolDefinition],
-        allow_text_result: bool,
-        result_tools: list[ToolDefinition],
-    ):
-        tools = [_function_from_abstract_tool(t) for t in function_tools]
-        if result_tools:
-            tools += [_function_from_abstract_tool(t) for t in result_tools]
-
-        if allow_text_result:
-            tool_config = None
-        else:
-            tool_config = _tool_config([t['name'] for t in tools])
-
-        self.http_client = http_client
-        self.model_name = model_name
-        self.auth = auth
-        self.tools = _GeminiTools(function_declarations=tools) if tools else None
-        self.tool_config = tool_config
-        self.url = url
+    @property
+    def url(self) -> str:
+        assert self._url is not None, 'URL not initialized'
+        return self._url
 
     async def request(
-        self, messages: list[ModelMessage], model_settings: ModelSettings | None
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
     ) -> tuple[ModelResponse, usage.Usage]:
+        check_allow_model_requests()
         async with self._make_request(
-            messages, False, cast(GeminiModelSettings, model_settings or {})
+            messages, False, cast(GeminiModelSettings, model_settings or {}), model_request_parameters
         ) as http_response:
             response = _gemini_response_ta.validate_json(await http_response.aread())
         return self._process_response(response), _metadata_as_usage(response)
 
     @asynccontextmanager
     async def request_stream(
-        self, messages: list[ModelMessage], model_settings: ModelSettings | None
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
     ) -> AsyncIterator[StreamedResponse]:
-        async with self._make_request(messages, True, cast(GeminiModelSettings, model_settings or {})) as http_response:
+        check_allow_model_requests()
+        async with self._make_request(
+            messages, True, cast(GeminiModelSettings, model_settings or {}), model_request_parameters
+        ) as http_response:
             yield await self._process_streamed_response(http_response)
+
+    @property
+    def model_name(self) -> GeminiModelName:
+        """The model name."""
+        return self._model_name
+
+    @property
+    def system(self) -> str | None:
+        """The system / model provider."""
+        return self._system
+
+    def _get_tools(self, model_request_parameters: ModelRequestParameters) -> _GeminiTools | None:
+        tools = [_function_from_abstract_tool(t) for t in model_request_parameters.function_tools]
+        if model_request_parameters.result_tools:
+            tools += [_function_from_abstract_tool(t) for t in model_request_parameters.result_tools]
+        return _GeminiTools(function_declarations=tools) if tools else None
+
+    def _get_tool_config(
+        self, model_request_parameters: ModelRequestParameters, tools: _GeminiTools | None
+    ) -> _GeminiToolConfig | None:
+        if model_request_parameters.allow_text_result:
+            return None
+        elif tools:
+            return _tool_config([t['name'] for t in tools['function_declarations']])
+        else:
+            return _tool_config([])
 
     @asynccontextmanager
     async def _make_request(
-        self, messages: list[ModelMessage], streamed: bool, model_settings: GeminiModelSettings
+        self,
+        messages: list[ModelMessage],
+        streamed: bool,
+        model_settings: GeminiModelSettings,
+        model_request_parameters: ModelRequestParameters,
     ) -> AsyncIterator[HTTPResponse]:
+        tools = self._get_tools(model_request_parameters)
+        tool_config = self._get_tool_config(model_request_parameters, tools)
         sys_prompt_parts, contents = self._message_to_gemini_content(messages)
 
         request_data = _GeminiRequest(contents=contents)
         if sys_prompt_parts:
             request_data['system_instruction'] = _GeminiTextContent(role='user', parts=sys_prompt_parts)
-        if self.tools is not None:
-            request_data['tools'] = self.tools
-        if self.tool_config is not None:
-            request_data['tool_config'] = self.tool_config
+        if tools is not None:
+            request_data['tools'] = tools
+        if tool_config is not None:
+            request_data['tool_config'] = tool_config
 
         generation_config: _GeminiGenerationConfig = {}
         if model_settings:
@@ -222,6 +209,8 @@ class GeminiAgentModel(AgentModel):
                 generation_config['presence_penalty'] = presence_penalty
             if (frequency_penalty := model_settings.get('frequency_penalty')) is not None:
                 generation_config['frequency_penalty'] = frequency_penalty
+            if (gemini_safety_settings := model_settings.get('gemini_safety_settings')) != []:
+                request_data['safety_settings'] = gemini_safety_settings
         if generation_config:
             request_data['generation_config'] = generation_config
 
@@ -250,8 +239,13 @@ class GeminiAgentModel(AgentModel):
     def _process_response(self, response: _GeminiResponse) -> ModelResponse:
         if len(response['candidates']) != 1:
             raise UnexpectedModelBehavior('Expected exactly one candidate in Gemini response')
+        if 'content' not in response['candidates'][0]:
+            if response['candidates'][0].get('finish_reason') == 'SAFETY':
+                raise UnexpectedModelBehavior('Safety settings triggered', str(response))
+            else:
+                raise UnexpectedModelBehavior('Content field missing from Gemini response', str(response))
         parts = response['candidates'][0]['content']['parts']
-        return _process_response_from_parts(parts, model_name=self.model_name)
+        return _process_response_from_parts(parts, model_name=response.get('model_version', self._model_name))
 
     async def _process_streamed_response(self, http_response: HTTPResponse) -> StreamedResponse:
         """Process a streamed response, and prepare a streaming response to return."""
@@ -262,19 +256,19 @@ class GeminiAgentModel(AgentModel):
         async for chunk in aiter_bytes:
             content.extend(chunk)
             responses = _gemini_streamed_response_ta.validate_json(
-                content,
+                _ensure_decodeable(content),
                 experimental_allow_partial='trailing-strings',
             )
             if responses:
                 last = responses[-1]
-                if last['candidates'] and last['candidates'][0]['content']['parts']:
+                if last['candidates'] and last['candidates'][0].get('content', {}).get('parts'):
                     start_response = last
                     break
 
         if start_response is None:
             raise UnexpectedModelBehavior('Streamed response ended without content or tool calls')
 
-        return GeminiStreamedResponse(_model_name=self.model_name, _content=content, _stream=aiter_bytes)
+        return GeminiStreamedResponse(_model_name=self._model_name, _content=content, _stream=aiter_bytes)
 
     @classmethod
     def _message_to_gemini_content(
@@ -312,10 +306,28 @@ class GeminiAgentModel(AgentModel):
         return sys_prompt_parts, contents
 
 
+class AuthProtocol(Protocol):
+    """Abstract definition for Gemini authentication."""
+
+    async def headers(self) -> dict[str, str]: ...
+
+
+@dataclass
+class ApiKeyAuth:
+    """Authentication using an API key for the `X-Goog-Api-Key` header."""
+
+    api_key: str
+
+    async def headers(self) -> dict[str, str]:
+        # https://cloud.google.com/docs/authentication/api-keys-use#using-with-rest
+        return {'X-Goog-Api-Key': self.api_key}
+
+
 @dataclass
 class GeminiStreamedResponse(StreamedResponse):
     """Implementation of `StreamedResponse` for the Gemini model."""
 
+    _model_name: GeminiModelName
     _content: bytearray
     _stream: AsyncIterator[bytes]
     _timestamp: datetime = field(default_factory=_utils.now_utc, init=False)
@@ -323,6 +335,8 @@ class GeminiStreamedResponse(StreamedResponse):
     async def _get_event_iterator(self) -> AsyncIterator[ModelResponseStreamEvent]:
         async for gemini_response in self._get_gemini_responses():
             candidate = gemini_response['candidates'][0]
+            if 'content' not in candidate:
+                raise UnexpectedModelBehavior('Streamed response has no content field')
             gemini_part: _GeminiPartUnion
             for gemini_part in candidate['content']['parts']:
                 if 'text' in gemini_part:
@@ -358,7 +372,7 @@ class GeminiStreamedResponse(StreamedResponse):
             self._content.extend(chunk)
 
             gemini_responses = _gemini_streamed_response_ta.validate_json(
-                self._content,
+                _ensure_decodeable(self._content),
                 experimental_allow_partial='trailing-strings',
             )
 
@@ -377,7 +391,14 @@ class GeminiStreamedResponse(StreamedResponse):
             self._usage += _metadata_as_usage(r)
             yield r
 
+    @property
+    def model_name(self) -> GeminiModelName:
+        """Get the model name of the response."""
+        return self._model_name
+
+    @property
     def timestamp(self) -> datetime:
+        """Get the timestamp of the response."""
         return self._timestamp
 
 
@@ -396,6 +417,7 @@ class _GeminiRequest(TypedDict):
     contents: list[_GeminiContent]
     tools: NotRequired[_GeminiTools]
     tool_config: NotRequired[_GeminiToolConfig]
+    safety_settings: NotRequired[list[GeminiSafetySettings]]
     # we don't implement `generationConfig`, instead we use a named tool for the response
     system_instruction: NotRequired[_GeminiTextContent]
     """
@@ -403,6 +425,38 @@ class _GeminiRequest(TypedDict):
     <https://ai.google.dev/gemini-api/docs/system-instructions?lang=rest>
     """
     generation_config: NotRequired[_GeminiGenerationConfig]
+
+
+class GeminiSafetySettings(TypedDict):
+    """Safety settings options for Gemini model request.
+
+    See [Gemini API docs](https://ai.google.dev/gemini-api/docs/safety-settings) for safety category and threshold descriptions.
+    For an example on how to use `GeminiSafetySettings`, see [here](../../agents.md#model-specific-settings).
+    """
+
+    category: Literal[
+        'HARM_CATEGORY_UNSPECIFIED',
+        'HARM_CATEGORY_HARASSMENT',
+        'HARM_CATEGORY_HATE_SPEECH',
+        'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+        'HARM_CATEGORY_DANGEROUS_CONTENT',
+        'HARM_CATEGORY_CIVIC_INTEGRITY',
+    ]
+    """
+    Safety settings category.
+    """
+
+    threshold: Literal[
+        'HARM_BLOCK_THRESHOLD_UNSPECIFIED',
+        'BLOCK_LOW_AND_ABOVE',
+        'BLOCK_MEDIUM_AND_ABOVE',
+        'BLOCK_ONLY_HIGH',
+        'BLOCK_NONE',
+        'OFF',
+    ]
+    """
+    Safety settings threshold.
+    """
 
 
 class _GeminiGenerationConfig(TypedDict, total=False):
@@ -576,13 +630,14 @@ class _GeminiResponse(TypedDict):
     # usageMetadata appears to be required by both APIs but is omitted when streaming responses until the last response
     usage_metadata: NotRequired[Annotated[_GeminiUsageMetaData, pydantic.Field(alias='usageMetadata')]]
     prompt_feedback: NotRequired[Annotated[_GeminiPromptFeedback, pydantic.Field(alias='promptFeedback')]]
+    model_version: NotRequired[Annotated[str, pydantic.Field(alias='modelVersion')]]
 
 
 class _GeminiCandidates(TypedDict):
     """See <https://ai.google.dev/api/generate-content#v1beta.Candidate>."""
 
-    content: _GeminiContent
-    finish_reason: NotRequired[Annotated[Literal['STOP', 'MAX_TOKENS'], pydantic.Field(alias='finishReason')]]
+    content: NotRequired[_GeminiContent]
+    finish_reason: NotRequired[Annotated[Literal['STOP', 'MAX_TOKENS', 'SAFETY'], pydantic.Field(alias='finishReason')]]
     """
     See <https://ai.google.dev/api/generate-content#FinishReason>, lots of other values are possible,
     but let's wait until we see them and know what they mean to add them here.
@@ -630,6 +685,7 @@ class _GeminiSafetyRating(TypedDict):
         'HARM_CATEGORY_CIVIC_INTEGRITY',
     ]
     probability: Literal['NEGLIGIBLE', 'LOW', 'MEDIUM', 'HIGH']
+    blocked: NotRequired[bool]
 
 
 class _GeminiPromptFeedback(TypedDict):
@@ -720,3 +776,19 @@ class _GeminiJsonSchema:
 
         if items_schema := schema.get('items'):  # pragma: no branch
             self._simplify(items_schema, refs_stack)
+
+
+def _ensure_decodeable(content: bytearray) -> bytearray:
+    """Trim any invalid unicode point bytes off the end of a bytearray.
+
+    This is necessary before attempting to parse streaming JSON bytes.
+
+    This is a temporary workaround until https://github.com/pydantic/pydantic-core/issues/1633 is resolved
+    """
+    while True:
+        try:
+            content.decode()
+        except UnicodeDecodeError:
+            content = content[:-1]  # this will definitely succeed before we run out of bytes
+        else:
+            return content

@@ -4,7 +4,7 @@ import inspect
 import re
 from collections.abc import AsyncIterator, Awaitable, Iterable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import chain
 from typing import Callable, Union
@@ -27,7 +27,7 @@ from ..messages import (
 )
 from ..settings import ModelSettings
 from ..tools import ToolDefinition
-from . import AgentModel, Model, StreamedResponse
+from . import Model, ModelRequestParameters, StreamedResponse
 
 
 @dataclass(init=False)
@@ -39,6 +39,9 @@ class FunctionModel(Model):
 
     function: FunctionDef | None = None
     stream_function: StreamFunctionDef | None = None
+
+    _model_name: str = field(repr=False)
+    _system: str | None = field(default=None, repr=False)
 
     @overload
     def __init__(self, function: FunctionDef) -> None: ...
@@ -63,23 +66,70 @@ class FunctionModel(Model):
         self.function = function
         self.stream_function = stream_function
 
-    async def agent_model(
-        self,
-        *,
-        function_tools: list[ToolDefinition],
-        allow_text_result: bool,
-        result_tools: list[ToolDefinition],
-    ) -> AgentModel:
-        return FunctionAgentModel(
-            self.function,
-            self.stream_function,
-            AgentInfo(function_tools, allow_text_result, result_tools, None),
-        )
-
-    def name(self) -> str:
         function_name = self.function.__name__ if self.function is not None else ''
         stream_function_name = self.stream_function.__name__ if self.stream_function is not None else ''
-        return f'function:{function_name}:{stream_function_name}'
+        self._model_name = f'function:{function_name}:{stream_function_name}'
+
+    async def request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> tuple[ModelResponse, usage.Usage]:
+        agent_info = AgentInfo(
+            model_request_parameters.function_tools,
+            model_request_parameters.allow_text_result,
+            model_request_parameters.result_tools,
+            model_settings,
+        )
+
+        assert self.function is not None, 'FunctionModel must receive a `function` to support non-streamed requests'
+
+        if inspect.iscoroutinefunction(self.function):
+            response = await self.function(messages, agent_info)
+        else:
+            response_ = await _utils.run_in_executor(self.function, messages, agent_info)
+            assert isinstance(response_, ModelResponse), response_
+            response = response_
+        response.model_name = f'function:{self.function.__name__}'
+        # TODO is `messages` right here? Should it just be new messages?
+        return response, _estimate_usage(chain(messages, [response]))
+
+    @asynccontextmanager
+    async def request_stream(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> AsyncIterator[StreamedResponse]:
+        agent_info = AgentInfo(
+            model_request_parameters.function_tools,
+            model_request_parameters.allow_text_result,
+            model_request_parameters.result_tools,
+            model_settings,
+        )
+
+        assert self.stream_function is not None, (
+            'FunctionModel must receive a `stream_function` to support streamed requests'
+        )
+
+        response_stream = PeekableAsyncStream(self.stream_function(messages, agent_info))
+
+        first = await response_stream.peek()
+        if isinstance(first, _utils.Unset):
+            raise ValueError('Stream function must return at least one item')
+
+        yield FunctionStreamedResponse(_model_name=f'function:{self.stream_function.__name__}', _iter=response_stream)
+
+    @property
+    def model_name(self) -> str:
+        """The model name."""
+        return self._model_name
+
+    @property
+    def system(self) -> str | None:
+        """The system / model provider."""
+        return self._system
 
 
 @dataclass(frozen=True)
@@ -119,9 +169,11 @@ class DeltaToolCall:
 DeltaToolCalls: TypeAlias = dict[int, DeltaToolCall]
 """A mapping of tool call IDs to incremental changes."""
 
+# TODO: Change the signature to Callable[[list[ModelMessage], ModelSettings, ModelRequestParameters], ...]
 FunctionDef: TypeAlias = Callable[[list[ModelMessage], AgentInfo], Union[ModelResponse, Awaitable[ModelResponse]]]
 """A function used to generate a non-streamed response."""
 
+# TODO: Change signature as indicated above
 StreamFunctionDef: TypeAlias = Callable[[list[ModelMessage], AgentInfo], AsyncIterator[Union[str, DeltaToolCalls]]]
 """A function used to generate a streamed response.
 
@@ -133,53 +185,10 @@ E.g. you need to yield all text or all `DeltaToolCalls`, not mix them.
 
 
 @dataclass
-class FunctionAgentModel(AgentModel):
-    """Implementation of `AgentModel` for [FunctionModel][pydantic_ai.models.function.FunctionModel]."""
-
-    function: FunctionDef | None
-    stream_function: StreamFunctionDef | None
-    agent_info: AgentInfo
-
-    async def request(
-        self, messages: list[ModelMessage], model_settings: ModelSettings | None
-    ) -> tuple[ModelResponse, usage.Usage]:
-        agent_info = replace(self.agent_info, model_settings=model_settings)
-
-        assert self.function is not None, 'FunctionModel must receive a `function` to support non-streamed requests'
-        model_name = f'function:{self.function.__name__}'
-
-        if inspect.iscoroutinefunction(self.function):
-            response = await self.function(messages, agent_info)
-        else:
-            response_ = await _utils.run_in_executor(self.function, messages, agent_info)
-            assert isinstance(response_, ModelResponse), response_
-            response = response_
-        response.model_name = model_name
-        # TODO is `messages` right here? Should it just be new messages?
-        return response, _estimate_usage(chain(messages, [response]))
-
-    @asynccontextmanager
-    async def request_stream(
-        self, messages: list[ModelMessage], model_settings: ModelSettings | None
-    ) -> AsyncIterator[StreamedResponse]:
-        assert (
-            self.stream_function is not None
-        ), 'FunctionModel must receive a `stream_function` to support streamed requests'
-        model_name = f'function:{self.stream_function.__name__}'
-
-        response_stream = PeekableAsyncStream(self.stream_function(messages, self.agent_info))
-
-        first = await response_stream.peek()
-        if isinstance(first, _utils.Unset):
-            raise ValueError('Stream function must return at least one item')
-
-        yield FunctionStreamedResponse(_model_name=model_name, _iter=response_stream)
-
-
-@dataclass
 class FunctionStreamedResponse(StreamedResponse):
     """Implementation of `StreamedResponse` for [FunctionModel][pydantic_ai.models.function.FunctionModel]."""
 
+    _model_name: str
     _iter: AsyncIterator[str | DeltaToolCalls]
     _timestamp: datetime = field(default_factory=_utils.now_utc)
 
@@ -207,7 +216,14 @@ class FunctionStreamedResponse(StreamedResponse):
                     if maybe_event is not None:
                         yield maybe_event
 
+    @property
+    def model_name(self) -> str:
+        """Get the model name of the response."""
+        return self._model_name
+
+    @property
     def timestamp(self) -> datetime:
+        """Get the timestamp of the response."""
         return self._timestamp
 
 

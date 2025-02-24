@@ -25,11 +25,11 @@ from pydantic_ai.messages import (
 from pydantic_ai.result import Usage
 from pydantic_ai.settings import ModelSettings
 
-from ..conftest import IsNow, try_import
+from ..conftest import IsNow, TestEnv, try_import
 from .mock_async_stream import MockAsyncStream
 
 with try_import() as imports_successful:
-    from openai import NOT_GIVEN, AsyncOpenAI
+    from openai import NOT_GIVEN, AsyncOpenAI, OpenAIError
     from openai.types import chat
     from openai.types.chat.chat_completion import Choice
     from openai.types.chat.chat_completion_chunk import (
@@ -54,15 +54,33 @@ def test_init():
     m = OpenAIModel('gpt-4o', api_key='foobar')
     assert str(m.client.base_url) == 'https://api.openai.com/v1/'
     assert m.client.api_key == 'foobar'
-    assert m.name() == 'openai:gpt-4o'
+    assert m.model_name == 'gpt-4o'
 
 
 def test_init_with_base_url():
     m = OpenAIModel('gpt-4o', base_url='https://example.com/v1', api_key='foobar')
     assert str(m.client.base_url) == 'https://example.com/v1/'
     assert m.client.api_key == 'foobar'
-    assert m.name() == 'openai:gpt-4o'
-    m.name()
+    assert m.model_name == 'gpt-4o'
+
+
+def test_init_with_no_api_key_will_still_setup_client():
+    m = OpenAIModel('llama3.2', base_url='http://localhost:19434/v1')
+    assert str(m.client.base_url) == 'http://localhost:19434/v1/'
+
+
+def test_init_with_non_openai_model():
+    m = OpenAIModel('llama3.2-vision:latest', base_url='https://example.com/v1/')
+    assert m.model_name == 'llama3.2-vision:latest'
+
+
+def test_init_of_openai_without_api_key_raises_error(env: TestEnv):
+    env.remove('OPENAI_API_KEY')
+    with pytest.raises(
+        OpenAIError,
+        match='^The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable$',
+    ):
+        OpenAIModel('gpt-4o')
 
 
 @dataclass
@@ -122,7 +140,7 @@ def completion_message(message: ChatCompletionMessage, *, usage: CompletionUsage
         id='123',
         choices=[Choice(finish_reason='stop', index=0, message=message)],
         created=1704067200,  # 2024-01-01
-        model='gpt-4o',
+        model='gpt-4o-123',
         object='chat.completion',
         usage=usage,
     )
@@ -149,13 +167,13 @@ async def test_request_simple_success(allow_model_requests: None):
             ModelRequest(parts=[UserPromptPart(content='hello', timestamp=IsNow(tz=timezone.utc))]),
             ModelResponse(
                 parts=[TextPart(content='world')],
-                model_name='gpt-4o',
+                model_name='gpt-4o-123',
                 timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
             ModelRequest(parts=[UserPromptPart(content='hello', timestamp=IsNow(tz=timezone.utc))]),
             ModelResponse(
                 parts=[TextPart(content='world')],
-                model_name='gpt-4o',
+                model_name='gpt-4o-123',
                 timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
             ),
         ]
@@ -219,7 +237,7 @@ async def test_request_structured_response(allow_model_requests: None):
                         tool_call_id='123',
                     )
                 ],
-                model_name='gpt-4o',
+                model_name='gpt-4o-123',
                 timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
             ),
             ModelRequest(
@@ -307,7 +325,7 @@ async def test_request_tool_call(allow_model_requests: None):
                         tool_call_id='1',
                     )
                 ],
-                model_name='gpt-4o',
+                model_name='gpt-4o-123',
                 timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
             ),
             ModelRequest(
@@ -328,7 +346,7 @@ async def test_request_tool_call(allow_model_requests: None):
                         tool_call_id='2',
                     )
                 ],
-                model_name='gpt-4o',
+                model_name='gpt-4o-123',
                 timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
             ),
             ModelRequest(
@@ -343,7 +361,7 @@ async def test_request_tool_call(allow_model_requests: None):
             ),
             ModelResponse(
                 parts=[TextPart(content='final response')],
-                model_name='gpt-4o',
+                model_name='gpt-4o-123',
                 timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
             ),
         ]
