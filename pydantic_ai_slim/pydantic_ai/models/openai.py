@@ -6,8 +6,8 @@ from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from itertools import chain
 from typing import Literal, Union, cast, overload
+
 from httpx import AsyncClient as AsyncHTTPClient
 from typing_extensions import assert_never, deprecated
 
@@ -72,19 +72,6 @@ allows this model to be used more easily with other model types (ie, Ollama, Dee
 """
 
 OpenAISystemPromptRole = Literal['system', 'developer', 'user']
-
-
-
-class Function(TypedDict, total=False):
-    name: Required[str]
-    """The name of the function to call."""
-
-
-class ChatCompletionNamedToolChoiceParam(TypedDict, total=False):
-    function: Required[Function]
-
-    type: Required[Literal["function"]]
-    """The type of the tool. Currently, only `function` is supported."""
 
 
 class OpenAIModelSettings(ModelSettings):
@@ -256,24 +243,27 @@ class OpenAIModel(Model):
     ) -> chat.ChatCompletion:
         pass
 
-    def _get_tool_choice(self, model_settings: OpenAIModelSettings) ->  Literal['none', 'required', 'auto'] | None:
-        """Get tool choice for the model.
+    async def _completions_create(
+        self,
+        messages: list[ModelMessage],
+        stream: bool,
+        model_settings: OpenAIModelSettings,
+        model_request_parameters: ModelRequestParameters,
+    ) -> chat.ChatCompletion | AsyncStream[ChatCompletionChunk]:
+        tools = self._get_tools(model_request_parameters)
 
-        - "auto": Default mode. Model decides if it uses the tool or not.
-        - "none": Prevents tool use.
-        - "required": Forces tool use.
-        """
-        tool_choice: Literal['none', 'required', 'auto'] | None = getattr(model_settings, 'tool_choice', None)
+        # standalone function to make it easier to override
+        if not tools:
+            tool_choice: Literal['none', 'required', 'auto'] | None = None
+        elif not model_request_parameters.allow_text_result:
+            tool_choice = 'required'
+        else:
+            tool_choice = 'auto'
 
-        if tool_choice is None:
-            if not self.tools:
-                tool_choice = None
-            elif not self.allow_text_result:
-                tool_choice = 'required'
-            else:
-                tool_choice = 'auto'
-
-        openai_messages = list(chain(*(self._map_message(m) for m in messages)))
+        openai_messages: list[chat.ChatCompletionMessageParam] = []
+        for m in messages:
+            async for msg in self._map_message(m):
+                openai_messages.append(msg)
 
         try:
             return await self.client.chat.completions.create(
