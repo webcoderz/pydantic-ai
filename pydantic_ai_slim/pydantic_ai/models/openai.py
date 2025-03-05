@@ -316,7 +316,7 @@ class OpenAIModel(Model):
         - "none": Prevents tool use.
         - "required": Forces tool use.
         """
-        tool_choice: Union[Literal['none', 'required', 'auto'] ,list[chat.ChatCompletionToolParam]]| None = getattr(model_settings, 'tool_choice', None)
+        tool_choice: Union[Literal['none', 'required', 'auto'] , ChatCompletionNamedToolChoiceParam ]| None = getattr(model_settings, 'tool_choice', None)
 
         if tool_choice is None:
             if not tools:
