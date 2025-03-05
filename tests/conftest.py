@@ -186,6 +186,11 @@ def set_event_loop() -> Iterator[None]:
     new_loop.close()
 
 
+def raise_if_exception(e: Any) -> None:
+    if isinstance(e, Exception):
+        raise e
+
+
 def pytest_recording_configure(config: Any, vcr: VCR):
     from . import json_body_serializer
 
@@ -195,6 +200,7 @@ def pytest_recording_configure(config: Any, vcr: VCR):
 @pytest.fixture(scope='module')
 def vcr_config():
     return {
+        'ignore_localhost': True,
         # Note: additional header filtering is done inside the serializer
         'filter_headers': ['authorization', 'x-api-key'],
         'decode_compressed_response': True,
