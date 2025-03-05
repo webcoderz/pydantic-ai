@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-
+from typing import Literal, Union
 from httpx import Timeout
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict, Required
 
 if TYPE_CHECKING:
     pass
 
+class Function(TypedDict, total=False):
+    name: Required[str]
+    """The name of the function to call."""
+
+
+class ChatCompletionNamedToolChoiceParam(TypedDict, total=False):
+    function: Required[Function]
+
+    type: Required[Literal["function"]]
+    """The type of the tool. Currently, only `function` is supported."""
 
 class ModelSettings(TypedDict, total=False):
     """Settings to configure an LLM.

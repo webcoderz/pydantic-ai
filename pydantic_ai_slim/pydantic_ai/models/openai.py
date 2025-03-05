@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from itertools import chain
-from typing import Literal, Union, cast, overload, Any, Dict
+from typing import Literal, Union, cast, overload
 from httpx import AsyncClient as AsyncHTTPClient
 from typing_extensions import TypedDict, assert_never
 
@@ -71,10 +71,18 @@ allows this model to be used more easily with other model types (ie, Ollama, Dee
 
 OpenAISystemPromptRole = Literal['system', 'developer', 'user']
 
-class ChatCompletionNamedToolChoiceParam(TypedDict):
-    type: Literal["named"]
-    name: str
-    parameters: Dict[str, Any]
+
+
+class Function(TypedDict, total=False):
+    name: Required[str]
+    """The name of the function to call."""
+
+
+class ChatCompletionNamedToolChoiceParam(TypedDict, total=False):
+    function: Required[Function]
+
+    type: Required[Literal["function"]]
+    """The type of the tool. Currently, only `function` is supported."""
 
 
 class OpenAIModelSettings(ModelSettings):
