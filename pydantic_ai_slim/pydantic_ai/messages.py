@@ -189,10 +189,7 @@ class ToolReturnPart:
             return {'return_value': tool_return_ta.dump_python(self.content, mode='json')}
 
     def otel_event(self) -> Event:
-        return Event(
-            'gen_ai.tool.message',
-            body={'content': self.content, 'role': 'tool', 'id': self.tool_call_id, 'name': self.tool_name},
-        )
+        return Event('gen_ai.tool.message', body={'content': self.content, 'role': 'tool', 'id': self.tool_call_id})
 
 
 error_details_ta = pydantic.TypeAdapter(list[pydantic_core.ErrorDetails], config=pydantic.ConfigDict(defer_build=True))
@@ -247,13 +244,7 @@ class RetryPromptPart:
             return Event('gen_ai.user.message', body={'content': self.model_response(), 'role': 'user'})
         else:
             return Event(
-                'gen_ai.tool.message',
-                body={
-                    'content': self.model_response(),
-                    'role': 'tool',
-                    'id': self.tool_call_id,
-                    'name': self.tool_name,
-                },
+                'gen_ai.tool.message', body={'content': self.model_response(), 'role': 'tool', 'id': self.tool_call_id}
             )
 
 

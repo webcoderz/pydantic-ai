@@ -143,7 +143,6 @@ class GeminiModel(Model):
             else:
                 self._system = provider.name
                 self.client = provider.client
-            self._url = str(self.client.base_url)
         else:
             if api_key is None:
                 if env_api_key := os.getenv('GEMINI_API_KEY'):
@@ -160,7 +159,7 @@ class GeminiModel(Model):
         return self._auth
 
     @property
-    def base_url(self) -> str:
+    def url(self) -> str:
         assert self._url is not None, 'URL not initialized'
         return self._url
 
@@ -258,7 +257,7 @@ class GeminiModel(Model):
             'User-Agent': get_user_agent(),
         }
         if self._provider is None:  # pragma: no cover
-            url = self.base_url + ('streamGenerateContent' if streamed else 'generateContent')
+            url = self.url + ('streamGenerateContent' if streamed else 'generateContent')
             headers.update(await self.auth.headers())
         else:
             url = f'/{self._model_name}:{"streamGenerateContent" if streamed else "generateContent"}'
