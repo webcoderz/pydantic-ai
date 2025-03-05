@@ -1,7 +1,8 @@
 from __future__ import annotations as _annotations
 
+import base64
 import os
-from collections.abc import AsyncIterable, AsyncIterator, Iterable
+from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -13,6 +14,9 @@ from typing_extensions import TypedDict, assert_never
 from .. import UnexpectedModelBehavior, _utils, usage
 from .._utils import guard_tool_call_id as _guard_tool_call_id
 from ..messages import (
+    AudioUrl,
+    BinaryContent,
+    ImageUrl,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -38,7 +42,15 @@ from . import (
 try:
     from openai import NOT_GIVEN, AsyncOpenAI, AsyncStream
     from openai.types import ChatModel, chat
-    from openai.types.chat import ChatCompletionChunk
+    from openai.types.chat import (
+        ChatCompletionChunk,
+        ChatCompletionContentPartImageParam,
+        ChatCompletionContentPartInputAudioParam,
+        ChatCompletionContentPartParam,
+        ChatCompletionContentPartTextParam,
+    )
+    from openai.types.chat.chat_completion_content_part_image_param import ImageURL
+    from openai.types.chat.chat_completion_content_part_input_audio_param import InputAudio
 except ImportError as _import_error:
     raise ImportError(
         'Please install `openai` to use the OpenAI model, '
@@ -212,13 +224,6 @@ class OpenAIModel(Model):
             else:
                 tool_choice = 'auto'
 
-        return tool_choice
-
-
-    async def _completions_create(
-        self, messages: list[ModelMessage], stream: bool, model_settings: OpenAIModelSettings
-    ) -> chat.ChatCompletion | AsyncStream[ChatCompletionChunk]:
-        
         openai_messages = list(chain(*(self._map_message(m) for m in messages)))
 
         return await self.client.chat.completions.create(
@@ -272,10 +277,11 @@ class OpenAIModel(Model):
             tools += [self._map_tool_definition(r) for r in model_request_parameters.result_tools]
         return tools
 
-    def _map_message(self, message: ModelMessage) -> Iterable[chat.ChatCompletionMessageParam]:
+    async def _map_message(self, message: ModelMessage) -> AsyncIterable[chat.ChatCompletionMessageParam]:
         """Just maps a `pydantic_ai.Message` to a `openai.types.ChatCompletionMessageParam`."""
         if isinstance(message, ModelRequest):
-            yield from self._map_user_message(message)
+            async for item in self._map_user_message(message):
+                yield item
         elif isinstance(message, ModelResponse):
             texts: list[str] = []
             tool_calls: list[chat.ChatCompletionMessageToolCallParam] = []
@@ -316,7 +322,7 @@ class OpenAIModel(Model):
             },
         }
 
-    def _map_user_message(self, message: ModelRequest) -> Iterable[chat.ChatCompletionMessageParam]:
+    async def _map_user_message(self, message: ModelRequest) -> AsyncIterable[chat.ChatCompletionMessageParam]:
         for part in message.parts:
             if isinstance(part, SystemPromptPart):
                 if self.system_prompt_role == 'developer':
@@ -326,7 +332,7 @@ class OpenAIModel(Model):
                 else:
                     yield chat.ChatCompletionSystemMessageParam(role='system', content=part.content)
             elif isinstance(part, UserPromptPart):
-                yield chat.ChatCompletionUserMessageParam(role='user', content=part.content)
+                yield await self._map_user_prompt(part)
             elif isinstance(part, ToolReturnPart):
                 yield chat.ChatCompletionToolMessageParam(
                     role='tool',
@@ -344,6 +350,40 @@ class OpenAIModel(Model):
                     )
             else:
                 assert_never(part)
+
+    @staticmethod
+    async def _map_user_prompt(part: UserPromptPart) -> chat.ChatCompletionUserMessageParam:
+        content: str | list[ChatCompletionContentPartParam]
+        if isinstance(part.content, str):
+            content = part.content
+        else:
+            content = []
+            for item in part.content:
+                if isinstance(item, str):
+                    content.append(ChatCompletionContentPartTextParam(text=item, type='text'))
+                elif isinstance(item, ImageUrl):
+                    image_url = ImageURL(url=item.url)
+                    content.append(ChatCompletionContentPartImageParam(image_url=image_url, type='image_url'))
+                elif isinstance(item, BinaryContent):
+                    base64_encoded = base64.b64encode(item.data).decode('utf-8')
+                    if item.is_image:
+                        image_url = ImageURL(url=f'data:{item.media_type};base64,{base64_encoded}')
+                        content.append(ChatCompletionContentPartImageParam(image_url=image_url, type='image_url'))
+                    elif item.is_audio:
+                        audio = InputAudio(data=base64_encoded, format=item.audio_format)
+                        content.append(ChatCompletionContentPartInputAudioParam(input_audio=audio, type='input_audio'))
+                    else:  # pragma: no cover
+                        raise RuntimeError(f'Unsupported binary content type: {item.media_type}')
+                elif isinstance(item, AudioUrl):  # pragma: no cover
+                    client = cached_async_http_client()
+                    response = await client.get(item.url)
+                    response.raise_for_status()
+                    base64_encoded = base64.b64encode(response.content).decode('utf-8')
+                    audio = InputAudio(data=base64_encoded, format=response.headers.get('content-type'))
+                    content.append(ChatCompletionContentPartInputAudioParam(input_audio=audio, type='input_audio'))
+                else:
+                    assert_never(item)
+        return chat.ChatCompletionUserMessageParam(role='user', content=content)
 
 
 @dataclass
