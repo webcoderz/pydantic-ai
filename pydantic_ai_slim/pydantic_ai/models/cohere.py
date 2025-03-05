@@ -3,7 +3,7 @@ from __future__ import annotations as _annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from itertools import chain
-from typing import Literal, Union, cast
+from typing import Literal, Union, Any, cast
 
 from cohere import TextAssistantMessageContentItem
 from httpx import AsyncClient as AsyncHTTPClient
@@ -78,9 +78,11 @@ allow any name in the type hints.
 See [Cohere's docs](https://docs.cohere.com/v2/docs/models) for a list of all available models.
 """
 
+V2ChatRequestToolChoice = Union[Literal["REQUIRED", "NONE"], Any]
 
 class CohereModelSettings(ModelSettings):
     """Settings used for a Cohere model request."""
+
 
     # This class is a placeholder for any future cohere-specific settings
 
@@ -127,11 +129,6 @@ class CohereModel(Model):
         else:
             self.client = AsyncClientV2(api_key=api_key, httpx_client=http_client)
 
-    @property
-    def base_url(self) -> str:
-        client_wrapper = self.client._client_wrapper  # type: ignore
-        return str(client_wrapper.get_base_url())
-
     async def request(
         self,
         messages: list[ModelMessage],
@@ -142,6 +139,28 @@ class CohereModel(Model):
         response = await self._chat(messages, cast(CohereModelSettings, model_settings or {}), model_request_parameters)
         return self._process_response(response), _map_usage(response)
 
+    def _get_tool_choice(self, model_settings: CohereModelSettings) -> V2ChatRequestToolChoice | None:
+        """Determine the tool_choice setting for the model.
+
+        Allowed values in model_settings:
+        - 'REQUIRED': The model must use at least one tool.
+        - 'NONE': The model is forced not to use a tool.
+        If not provided, the model is free to choose:
+        - If no tools are available, leave unspecified.
+        - If text responses are disallowed, force tool usage ('REQUIRED').
+        - If text responses are allowed, leave unspecified (free to choose).
+        """
+        tool_choice: V2ChatRequestToolChoice | None = getattr(model_settings, 'tool_choice', None)
+
+        if tool_choice is None:
+            if not self.tools:
+                tool_choice = None
+            elif not self.allow_text_result:
+                tool_choice = 'REQUIRED'
+            else:
+                tool_choice = None
+
+        return tool_choice
     @property
     def model_name(self) -> CohereModelName:
         """The model name."""
@@ -164,7 +183,8 @@ class CohereModel(Model):
             return await self.client.chat(
                 model=self._model_name,
                 messages=cohere_messages,
-                tools=tools or OMIT,
+                tools=self.tools or OMIT,
+            tool_choice=self._get_tool_choice(model_settings) or OMIT,
                 max_tokens=model_settings.get('max_tokens', OMIT),
                 temperature=model_settings.get('temperature', OMIT),
                 p=model_settings.get('top_p', OMIT),

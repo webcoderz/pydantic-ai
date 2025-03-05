@@ -9,9 +9,11 @@ from datetime import datetime, timezone
 from itertools import chain
 from typing import Literal, Union, cast, overload
 from httpx import AsyncClient as AsyncHTTPClient
-from typing_extensions import TypedDict, assert_never
+from typing_extensions import assert_never, deprecated
 
-from .. import UnexpectedModelBehavior, _utils, usage
+from pydantic_ai.providers import Provider, infer_provider
+
+from .. import ModelHTTPError, UnexpectedModelBehavior, _utils, usage
 from .._utils import guard_tool_call_id as _guard_tool_call_id
 from ..messages import (
     AudioUrl,
@@ -40,7 +42,7 @@ from . import (
 )
 
 try:
-    from openai import NOT_GIVEN, AsyncOpenAI, AsyncStream
+    from openai import NOT_GIVEN, APIStatusError, AsyncOpenAI, AsyncStream
     from openai.types import ChatModel, chat
     from openai.types.chat import (
         ChatCompletionChunk,
@@ -111,10 +113,36 @@ class OpenAIModel(Model):
     _model_name: OpenAIModelName = field(repr=False)
     _system: str | None = field(repr=False)
 
+    @overload
     def __init__(
         self,
         model_name: OpenAIModelName,
         *,
+        provider: Literal['openai', 'deepseek'] | Provider[AsyncOpenAI] = 'openai',
+        system_prompt_role: OpenAISystemPromptRole | None = None,
+        system: str | None = 'openai',
+    ) -> None: ...
+
+    @deprecated('Use the `provider` parameter instead of `base_url`, `api_key`, `openai_client` and `http_client`.')
+    @overload
+    def __init__(
+        self,
+        model_name: OpenAIModelName,
+        *,
+        provider: None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        openai_client: AsyncOpenAI | None = None,
+        http_client: AsyncHTTPClient | None = None,
+        system_prompt_role: OpenAISystemPromptRole | None = None,
+        system: str | None = 'openai',
+    ) -> None: ...
+
+    def __init__(
+        self,
+        model_name: OpenAIModelName,
+        *,
+        provider: Literal['openai', 'deepseek'] | Provider[AsyncOpenAI] | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
         openai_client: AsyncOpenAI | None = None,
@@ -128,6 +156,7 @@ class OpenAIModel(Model):
             model_name: The name of the OpenAI model to use. List of model names available
                 [here](https://github.com/openai/openai-python/blob/v1.54.3/src/openai/types/chat_model.py#L7)
                 (Unfortunately, despite being ask to do so, OpenAI do not provide `.inv` files for their API).
+            provider: The provider to use. Defaults to `'openai'`.
             base_url: The base url for the OpenAI requests. If not provided, the `OPENAI_BASE_URL` environment variable
                 will be used if available. Otherwise, defaults to OpenAI's base url.
             api_key: The API key to use for authentication, if not provided, the `OPENAI_API_KEY` environment variable
@@ -142,20 +171,32 @@ class OpenAIModel(Model):
                 customize the `base_url` and `api_key` to use a different provider.
         """
         self._model_name = model_name
-        # This is a workaround for the OpenAI client requiring an API key, whilst locally served,
-        # openai compatible models do not always need an API key, but a placeholder (non-empty) key is required.
-        if api_key is None and 'OPENAI_API_KEY' not in os.environ and base_url is not None and openai_client is None:
-            api_key = 'api-key-not-set'
 
-        if openai_client is not None:
-            assert http_client is None, 'Cannot provide both `openai_client` and `http_client`'
-            assert base_url is None, 'Cannot provide both `openai_client` and `base_url`'
-            assert api_key is None, 'Cannot provide both `openai_client` and `api_key`'
-            self.client = openai_client
-        elif http_client is not None:
-            self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, http_client=http_client)
-        else:
-            self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, http_client=cached_async_http_client())
+        if provider is not None:
+            if isinstance(provider, str):
+                self.client = infer_provider(provider).client
+            else:
+                self.client = provider.client
+        else:  # pragma: no cover
+            # This is a workaround for the OpenAI client requiring an API key, whilst locally served,
+            # openai compatible models do not always need an API key, but a placeholder (non-empty) key is required.
+            if (
+                api_key is None
+                and 'OPENAI_API_KEY' not in os.environ
+                and base_url is not None
+                and openai_client is None
+            ):
+                api_key = 'api-key-not-set'
+
+            if openai_client is not None:
+                assert http_client is None, 'Cannot provide both `openai_client` and `http_client`'
+                assert base_url is None, 'Cannot provide both `openai_client` and `base_url`'
+                assert api_key is None, 'Cannot provide both `openai_client` and `api_key`'
+                self.client = openai_client
+            elif http_client is not None:
+                self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, http_client=http_client)
+            else:
+                self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, http_client=cached_async_http_client())
         self.system_prompt_role = system_prompt_role
         self._system = system
 
@@ -234,25 +275,30 @@ class OpenAIModel(Model):
 
         openai_messages = list(chain(*(self._map_message(m) for m in messages)))
 
-        return await self.client.chat.completions.create(
-            model=self._model_name,
-            messages=openai_messages,
-            n=1,
-            parallel_tool_calls=model_settings.get('parallel_tool_calls', NOT_GIVEN),
-            tools=self.tools or NOT_GIVEN,
-            tool_choice=self._get_tool_choice(model_settings) or NOT_GIVEN,
-            stream=stream,
-            stream_options={'include_usage': True} if stream else NOT_GIVEN,
-            max_tokens=model_settings.get('max_tokens', NOT_GIVEN),
-            temperature=model_settings.get('temperature', NOT_GIVEN),
-            top_p=model_settings.get('top_p', NOT_GIVEN),
-            timeout=model_settings.get('timeout', NOT_GIVEN),
-            seed=model_settings.get('seed', NOT_GIVEN),
-            presence_penalty=model_settings.get('presence_penalty', NOT_GIVEN),
-            frequency_penalty=model_settings.get('frequency_penalty', NOT_GIVEN),
-            logit_bias=model_settings.get('logit_bias', NOT_GIVEN),
-            reasoning_effort=model_settings.get('openai_reasoning_effort', NOT_GIVEN),
-        )
+        try:
+            return await self.client.chat.completions.create(
+                model=self._model_name,
+                messages=openai_messages,
+                n=1,
+                parallel_tool_calls=model_settings.get('parallel_tool_calls', NOT_GIVEN),
+                tools=tools or NOT_GIVEN,
+                tool_choice=tool_choice or NOT_GIVEN,
+                stream=stream,
+                stream_options={'include_usage': True} if stream else NOT_GIVEN,
+                max_tokens=model_settings.get('max_tokens', NOT_GIVEN),
+                temperature=model_settings.get('temperature', NOT_GIVEN),
+                top_p=model_settings.get('top_p', NOT_GIVEN),
+                timeout=model_settings.get('timeout', NOT_GIVEN),
+                seed=model_settings.get('seed', NOT_GIVEN),
+                presence_penalty=model_settings.get('presence_penalty', NOT_GIVEN),
+                frequency_penalty=model_settings.get('frequency_penalty', NOT_GIVEN),
+                logit_bias=model_settings.get('logit_bias', NOT_GIVEN),
+                reasoning_effort=model_settings.get('openai_reasoning_effort', NOT_GIVEN),
+            )
+        except APIStatusError as e:
+            if (status_code := e.status_code) >= 400:
+                raise ModelHTTPError(status_code=status_code, model_name=self.model_name, body=e.body) from e
+            raise
 
     def _process_response(self, response: chat.ChatCompletion) -> ModelResponse:
         """Process a non-streamed response, and prepare a message to return."""

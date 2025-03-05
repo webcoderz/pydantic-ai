@@ -1,5 +1,6 @@
 from __future__ import annotations as _annotations
 
+import base64
 import io
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from contextlib import asynccontextmanager
@@ -12,7 +13,7 @@ from typing import Any, Literal, Union, cast, overload
 from httpx import AsyncClient as AsyncHTTPClient
 from typing_extensions import assert_never
 
-from .. import UnexpectedModelBehavior, _utils, usage
+from .. import ModelHTTPError, UnexpectedModelBehavior, _utils, usage
 from .._utils import guard_tool_call_id as _guard_tool_call_id
 from ..messages import (
     BinaryContent,
@@ -40,8 +41,9 @@ from . import (
 )
 
 try:
-    from anthropic import NOT_GIVEN, AsyncAnthropic, AsyncStream
+    from anthropic import NOT_GIVEN, APIStatusError, AsyncAnthropic, AsyncStream
     from anthropic.types import (
+        ContentBlock,
         ImageBlockParam,
         Message as AnthropicMessage,
         MessageParam,
@@ -69,6 +71,7 @@ except ImportError as _import_error:
     ) from _import_error
 
 LatestAnthropicModelNames = Literal[
+    'claude-3-7-sonnet-latest',
     'claude-3-5-haiku-latest',
     'claude-3-5-sonnet-latest',
     'claude-3-opus-latest',
@@ -221,19 +224,24 @@ class AnthropicModel(Model):
 
         system_prompt, anthropic_messages = await self._map_message(messages)
 
-        return await self.client.messages.create(
-            max_tokens=model_settings.get('max_tokens', 1024),
-            system=system_prompt or NOT_GIVEN,
-            messages=anthropic_messages,
-            model=self._model_name,
-            tools=tools or NOT_GIVEN,
-            tool_choice=tool_choice or NOT_GIVEN,
-            stream=stream,
-            temperature=model_settings.get('temperature', NOT_GIVEN),
-            top_p=model_settings.get('top_p', NOT_GIVEN),
-            timeout=model_settings.get('timeout', NOT_GIVEN),
-            metadata=model_settings.get('anthropic_metadata', NOT_GIVEN),
-        )
+        try:
+            return await self.client.messages.create(
+                max_tokens=model_settings.get('max_tokens', 1024),
+                system=system_prompt or NOT_GIVEN,
+                messages=anthropic_messages,
+                model=self._model_name,
+                tools=tools or NOT_GIVEN,
+                tool_choice=tool_choice or NOT_GIVEN,
+                stream=stream,
+                temperature=model_settings.get('temperature', NOT_GIVEN),
+                top_p=model_settings.get('top_p', NOT_GIVEN),
+                timeout=model_settings.get('timeout', NOT_GIVEN),
+                metadata=model_settings.get('anthropic_metadata', NOT_GIVEN),
+            )
+        except APIStatusError as e:
+            if (status_code := e.status_code) >= 400:
+                raise ModelHTTPError(status_code=status_code, model_name=self.model_name, body=e.body) from e
+            raise
 
     def _process_response(self, response: AnthropicMessage) -> ModelResponse:
         """Process a non-streamed response, and prepare a message to return."""
@@ -339,12 +347,35 @@ class AnthropicModel(Model):
                     else:
                         raise RuntimeError('Only images are supported for binary content')
                 elif isinstance(item, ImageUrl):
-                    response = await cached_async_http_client().get(item.url)
-                    response.raise_for_status()
-                    yield ImageBlockParam(
-                        source={'data': io.BytesIO(response.content), 'media_type': 'image/jpeg', 'type': 'base64'},
-                        type='image',
-                    )
+                    try:
+                        response = await cached_async_http_client().get(item.url)
+                        response.raise_for_status()
+                        yield ImageBlockParam(
+                            source={
+                                'data': io.BytesIO(response.content),
+                                'media_type': item.media_type,
+                                'type': 'base64',
+                            },
+                            type='image',
+                        )
+                    except ValueError:
+                        # Download the file if can't find the mime type.
+                        client = cached_async_http_client()
+                        response = await client.get(item.url, follow_redirects=True)
+                        response.raise_for_status()
+                        base64_encoded = base64.b64encode(response.content).decode('utf-8')
+                        if (mime_type := response.headers['Content-Type']) in (
+                            'image/jpeg',
+                            'image/png',
+                            'image/gif',
+                            'image/webp',
+                        ):
+                            yield ImageBlockParam(
+                                source={'data': base64_encoded, 'media_type': mime_type, 'type': 'base64'},
+                                type='image',
+                            )
+                        else:  # pragma: no cover
+                            raise RuntimeError(f'Unsupported image type: {mime_type}')
                 else:
                     raise RuntimeError(f'Unsupported content type: {type(item)}')
 
@@ -395,7 +426,7 @@ class AnthropicStreamedResponse(StreamedResponse):
     _timestamp: datetime
 
     async def _get_event_iterator(self) -> AsyncIterator[ModelResponseStreamEvent]:
-        current_block: TextBlock | ToolUseBlock | None = None
+        current_block: ContentBlock | None = None
         current_json: str = ''
 
         async for event in self._response:
