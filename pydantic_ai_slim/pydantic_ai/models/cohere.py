@@ -139,28 +139,6 @@ class CohereModel(Model):
         response = await self._chat(messages, cast(CohereModelSettings, model_settings or {}), model_request_parameters)
         return self._process_response(response), _map_usage(response)
 
-    def _get_tool_choice(self, model_settings: CohereModelSettings) -> V2ChatRequestToolChoice | None:
-        """Determine the tool_choice setting for the model.
-
-        Allowed values in model_settings:
-        - 'REQUIRED': The model must use at least one tool.
-        - 'NONE': The model is forced not to use a tool.
-        If not provided, the model is free to choose:
-        - If no tools are available, leave unspecified.
-        - If text responses are disallowed, force tool usage ('REQUIRED').
-        - If text responses are allowed, leave unspecified (free to choose).
-        """
-        tool_choice: V2ChatRequestToolChoice | None = getattr(model_settings, 'tool_choice', None)
-
-        if tool_choice is None:
-            if not self.tools:
-                tool_choice = None
-            elif not self.allow_text_result:
-                tool_choice = 'REQUIRED'
-            else:
-                tool_choice = None
-
-        return tool_choice
     @property
     def model_name(self) -> CohereModelName:
         """The model name."""
@@ -178,13 +156,14 @@ class CohereModel(Model):
         model_request_parameters: ModelRequestParameters,
     ) -> ChatResponse:
         tools = self._get_tools(model_request_parameters)
+        tool_choice = self._get_tool_choice(model_settings, model_request_parameters, tools)
         cohere_messages = list(chain(*(self._map_message(m) for m in messages)))
         try:
             return await self.client.chat(
                 model=self._model_name,
                 messages=cohere_messages,
-                tools=self.tools or OMIT,
-            tool_choice=self._get_tool_choice(model_settings) or OMIT,
+                tools=tools or OMIT,
+                tool_choice=tool_choice or OMIT,
                 max_tokens=model_settings.get('max_tokens', OMIT),
                 temperature=model_settings.get('temperature', OMIT),
                 p=model_settings.get('top_p', OMIT),
@@ -244,6 +223,30 @@ class CohereModel(Model):
         if model_request_parameters.result_tools:
             tools += [self._map_tool_definition(r) for r in model_request_parameters.result_tools]
         return tools
+
+
+    def _get_tool_choice(self, model_settings: CohereModelSettings,model_request_parameters: ModelRequestParameters,  tools:list[ToolV2]) -> V2ChatRequestToolChoice | None:
+        """Determine the tool_choice setting for the model.
+
+        Allowed values in model_settings:
+        - 'REQUIRED': The model must use at least one tool.
+        - 'NONE': The model is forced not to use a tool.
+        If not provided, the model is free to choose:
+        - If no tools are available, leave unspecified.
+        - If text responses are disallowed, force tool usage ('REQUIRED').
+        - If text responses are allowed, leave unspecified (free to choose).
+        """
+        tool_choice: V2ChatRequestToolChoice | None = getattr(model_settings, 'tool_choice', None)
+
+        if tool_choice is None:
+            if not tools:
+                tool_choice = None
+            elif not model_request_parameters.allow_text_result:
+                tool_choice = 'REQUIRED'
+            else:
+                tool_choice = None
+
+        return tool_choice
 
     @staticmethod
     def _map_tool_call(t: ToolCallPart) -> ToolCallV2:
