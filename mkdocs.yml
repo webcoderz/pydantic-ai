@@ -20,7 +20,6 @@ nav:
       - models.md
       - dependencies.md
       - tools.md
-      - common_tools.md
       - results.md
       - message-history.md
       - testing-evals.md
@@ -28,7 +27,6 @@ nav:
       - multi-agent-applications.md
       - graph.md
       - input.md
-      - cli.md
   - Examples:
       - examples/index.md
       - examples/pydantic-model.md
@@ -44,7 +42,6 @@ nav:
   - API Reference:
       - api/agent.md
       - api/tools.md
-      - api/common_tools.md
       - api/result.md
       - api/messages.md
       - api/exceptions.md
@@ -54,7 +51,6 @@ nav:
       - api/models/base.md
       - api/models/openai.md
       - api/models/anthropic.md
-      - api/models/bedrock.md
       - api/models/cohere.md
       - api/models/gemini.md
       - api/models/vertexai.md
@@ -62,8 +58,6 @@ nav:
       - api/models/mistral.md
       - api/models/test.md
       - api/models/function.md
-      - api/models/fallback.md
-      - api/providers.md
       - api/pydantic_graph/graph.md
       - api/pydantic_graph/nodes.md
       - api/pydantic_graph/state.md

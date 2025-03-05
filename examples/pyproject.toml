@@ -4,9 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pydantic-ai-examples"
-version = "0.0.33"
+version = "0.0.26"
 description = "Examples of how to use PydanticAI and what it can do."
-authors = [{ name = "Samuel Colvin", email = "samuel@pydantic.dev" }]
+authors = [
+    { name = "Samuel Colvin", email = "samuel@pydantic.dev" },
+]
 license = "MIT"
 readme = "README.md"
 classifiers = [

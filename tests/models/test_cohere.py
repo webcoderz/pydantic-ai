@@ -1,15 +1,14 @@
 from __future__ import annotations as _annotations
 
 import json
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timezone
-from typing import Any, Union, cast
+from typing import Any, cast
 
 import pytest
 from inline_snapshot import snapshot
 
-from pydantic_ai import Agent, ModelHTTPError, ModelRetry
+from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.messages import (
     ImageUrl,
     ModelRequest,
@@ -23,7 +22,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import Usage
 
-from ..conftest import IsNow, raise_if_exception, try_import
+from ..conftest import IsNow, try_import
 
 with try_import() as imports_successful:
     import cohere
@@ -35,12 +34,8 @@ with try_import() as imports_successful:
         ToolCallV2,
         ToolCallV2Function,
     )
-    from cohere.core.api_error import ApiError
 
     from pydantic_ai.models.cohere import CohereModel
-
-    # note: we use Union here for compatibility with Python 3.9
-    MockChatResponse = Union[ChatResponse, Exception]
 
 pytestmark = [
     pytest.mark.skipif(not imports_successful(), reason='cohere not installed'),
@@ -52,28 +47,25 @@ def test_init():
     m = CohereModel('command-r7b-12-2024', api_key='foobar')
     assert m.model_name == 'command-r7b-12-2024'
     assert m.system == 'cohere'
-    assert m.base_url == 'https://api.cohere.com'
 
 
 @dataclass
 class MockAsyncClientV2:
-    completions: MockChatResponse | Sequence[MockChatResponse] | None = None
+    completions: ChatResponse | list[ChatResponse] | None = None
     index = 0
 
     @classmethod
-    def create_mock(cls, completions: MockChatResponse | Sequence[MockChatResponse]) -> AsyncClientV2:
+    def create_mock(cls, completions: ChatResponse | list[ChatResponse]) -> AsyncClientV2:
         return cast(AsyncClientV2, cls(completions=completions))
 
     async def chat(  # pragma: no cover
         self, *_args: Any, **_kwargs: Any
     ) -> ChatResponse:
         assert self.completions is not None
-        if isinstance(self.completions, Sequence):
-            raise_if_exception(self.completions[self.index])
-            response = cast(ChatResponse, self.completions[self.index])
+        if isinstance(self.completions, list):
+            response = self.completions[self.index]
         else:
-            raise_if_exception(self.completions)
-            response = cast(ChatResponse, self.completions)
+            response = self.completions
         self.index += 1
         return response
 
@@ -338,17 +330,3 @@ async def test_multimodal(allow_model_requests: None):
                 ),
             ]
         )
-
-
-def test_model_status_error(allow_model_requests: None) -> None:
-    mock_client = MockAsyncClientV2.create_mock(
-        ApiError(
-            status_code=500,
-            body={'error': 'test error'},
-        )
-    )
-    m = CohereModel('command-r', cohere_client=mock_client)
-    agent = Agent(m)
-    with pytest.raises(ModelHTTPError) as exc_info:
-        agent.run_sync('hello')
-    assert str(exc_info.value) == snapshot("status_code: 500, model_name: command-r, body: {'error': 'test error'}")

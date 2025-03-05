@@ -2,17 +2,15 @@ from __future__ import annotations as _annotations
 
 import json
 import os
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timezone
 from functools import cached_property
-from typing import Any, TypeVar, Union, cast
+from typing import Any, TypeVar, cast
 
-import httpx
 import pytest
 from inline_snapshot import snapshot
 
-from pydantic_ai import Agent, ModelHTTPError, ModelRetry
+from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.messages import (
     BinaryContent,
     ImageUrl,
@@ -28,11 +26,11 @@ from pydantic_ai.messages import (
 from pydantic_ai.result import Usage
 from pydantic_ai.settings import ModelSettings
 
-from ..conftest import IsDatetime, IsNow, IsStr, raise_if_exception, try_import
+from ..conftest import IsDatetime, IsNow, IsStr, try_import
 from .mock_async_stream import MockAsyncStream
 
 with try_import() as imports_successful:
-    from anthropic import NOT_GIVEN, APIStatusError, AsyncAnthropic
+    from anthropic import NOT_GIVEN, AsyncAnthropic
     from anthropic.types import (
         ContentBlock,
         InputJSONDelta,
@@ -53,10 +51,6 @@ with try_import() as imports_successful:
 
     from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
 
-    # note: we use Union here so that casting works with Python 3.9
-    MockAnthropicMessage = Union[AnthropicMessage, Exception]
-    MockRawMessageStreamEvent = Union[RawMessageStreamEvent, Exception]
-
 pytestmark = [
     pytest.mark.skipif(not imports_successful(), reason='anthropic not installed'),
     pytest.mark.anyio,
@@ -71,13 +65,12 @@ def test_init():
     assert m.client.api_key == 'foobar'
     assert m.model_name == 'claude-3-5-haiku-latest'
     assert m.system == 'anthropic'
-    assert m.base_url == 'https://api.anthropic.com'
 
 
 @dataclass
 class MockAnthropic:
-    messages_: MockAnthropicMessage | Sequence[MockAnthropicMessage] | None = None
-    stream: Sequence[MockRawMessageStreamEvent] | Sequence[Sequence[MockRawMessageStreamEvent]] | None = None
+    messages_: AnthropicMessage | list[AnthropicMessage] | None = None
+    stream: list[RawMessageStreamEvent] | list[list[RawMessageStreamEvent]] | None = None
     index = 0
     chat_completion_kwargs: list[dict[str, Any]] = field(default_factory=list)
 
@@ -86,34 +79,34 @@ class MockAnthropic:
         return type('Messages', (), {'create': self.messages_create})
 
     @classmethod
-    def create_mock(cls, messages_: MockAnthropicMessage | Sequence[MockAnthropicMessage]) -> AsyncAnthropic:
+    def create_mock(cls, messages_: AnthropicMessage | list[AnthropicMessage]) -> AsyncAnthropic:
         return cast(AsyncAnthropic, cls(messages_=messages_))
 
     @classmethod
     def create_stream_mock(
-        cls, stream: Sequence[MockRawMessageStreamEvent] | Sequence[Sequence[MockRawMessageStreamEvent]]
+        cls, stream: list[RawMessageStreamEvent] | list[list[RawMessageStreamEvent]]
     ) -> AsyncAnthropic:
         return cast(AsyncAnthropic, cls(stream=stream))
 
     async def messages_create(
         self, *_args: Any, stream: bool = False, **kwargs: Any
-    ) -> AnthropicMessage | MockAsyncStream[MockRawMessageStreamEvent]:
+    ) -> AnthropicMessage | MockAsyncStream[RawMessageStreamEvent]:
         self.chat_completion_kwargs.append({k: v for k, v in kwargs.items() if v is not NOT_GIVEN})
 
         if stream:
             assert self.stream is not None, 'you can only use `stream=True` if `stream` is provided'
-            if isinstance(self.stream[0], Sequence):
-                response = MockAsyncStream(iter(cast(list[MockRawMessageStreamEvent], self.stream[self.index])))
+            # noinspection PyUnresolvedReferences
+            if isinstance(self.stream[0], list):
+                indexed_stream = cast(list[RawMessageStreamEvent], self.stream[self.index])
+                response = MockAsyncStream(iter(indexed_stream))
             else:
-                response = MockAsyncStream(iter(cast(list[MockRawMessageStreamEvent], self.stream)))
+                response = MockAsyncStream(iter(cast(list[RawMessageStreamEvent], self.stream)))
         else:
             assert self.messages_ is not None, '`messages` must be provided'
-            if isinstance(self.messages_, Sequence):
-                raise_if_exception(self.messages_[self.index])
-                response = cast(AnthropicMessage, self.messages_[self.index])
+            if isinstance(self.messages_, list):
+                response = self.messages_[self.index]
             else:
-                raise_if_exception(self.messages_)
-                response = cast(AnthropicMessage, self.messages_)
+                response = self.messages_
         self.index += 1
         return response
 
@@ -454,7 +447,7 @@ async def test_stream_structured(allow_model_requests: None):
     5. Update usage
     6. Message stop
     """
-    stream = [
+    stream: list[RawMessageStreamEvent] = [
         RawMessageStartEvent(
             type='message_start',
             message=AnthropicMessage(
@@ -500,7 +493,7 @@ async def test_stream_structured(allow_model_requests: None):
         RawMessageStopEvent(type='message_stop'),
     ]
 
-    done_stream = [
+    done_stream: list[RawMessageStreamEvent] = [
         RawMessageStartEvent(
             type='message_start',
             message=AnthropicMessage(
@@ -570,24 +563,6 @@ Potatoes are root vegetables that are staple foods in many cuisines around the w
 """)
 
 
-@pytest.mark.vcr()
-async def test_image_url_input_invalid_mime_type(allow_model_requests: None, anthropic_api_key: str):
-    m = AnthropicModel('claude-3-5-haiku-latest', api_key=anthropic_api_key)
-    agent = Agent(m)
-
-    result = await agent.run(
-        [
-            'What animal is this?',
-            ImageUrl(
-                url='https://lh3.googleusercontent.com/proxy/YngsuS8jQJysXxeucAgVBcSgIdwZlSQ-HvsNxGjHS0SrUKXI161bNKh6SOcMsNUGsnxoOrS3AYX--MT4T3S3SoCgSD1xKrtBwwItcgexaX_7W-qHo-VupmYgjjzWO-BuORLp9-pj8Kjr'
-            ),
-        ]
-    )
-    assert result.data == snapshot(
-        'This is a Great Horned Owl (Bubo virginianus), a large and powerful owl species. It has distinctive ear tufts (the "horns"), large yellow eyes, and a mottled gray-brown plumage that provides excellent camouflage. In this image, the owl is perched on a branch, surrounded by soft yellow and green vegetation, which creates a beautiful, slightly blurred background that highlights the owl\'s sharp features. Great Horned Owls are known for their adaptability, wide distribution across the Americas, and their status as powerful nocturnal predators.'
-    )
-
-
 @pytest.mark.parametrize('media_type', ('audio/wav', 'audio/mpeg'))
 async def test_audio_as_binary_content_input(allow_model_requests: None, media_type: str):
     c = completion_message([TextBlock(text='world', type='text')], AnthropicUsage(input_tokens=5, output_tokens=10))
@@ -599,20 +574,3 @@ async def test_audio_as_binary_content_input(allow_model_requests: None, media_t
 
     with pytest.raises(RuntimeError, match='Only images are supported for binary content'):
         await agent.run(['hello', BinaryContent(data=base64_content, media_type=media_type)])
-
-
-def test_model_status_error(allow_model_requests: None) -> None:
-    mock_client = MockAnthropic.create_mock(
-        APIStatusError(
-            'test error',
-            response=httpx.Response(status_code=500, request=httpx.Request('POST', 'https://example.com/v1')),
-            body={'error': 'test error'},
-        )
-    )
-    m = AnthropicModel('claude-3-5-sonnet-latest', anthropic_client=mock_client)
-    agent = Agent(m)
-    with pytest.raises(ModelHTTPError) as exc_info:
-        agent.run_sync('hello')
-    assert str(exc_info.value) == snapshot(
-        "status_code: 500, model_name: claude-3-5-sonnet-latest, body: {'error': 'test error'}"
-    )
