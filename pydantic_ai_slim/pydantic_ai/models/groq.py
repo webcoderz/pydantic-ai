@@ -42,7 +42,6 @@ try:
     from groq import NOT_GIVEN, APIStatusError, AsyncGroq, AsyncStream
     from groq.types import chat
     from groq.types.chat.chat_completion_content_part_image_param import ImageURL
-    from groq.types.chat.chat_completion_named_tool_choice_param import ChatCompletionNamedToolChoiceParam, Function
     from groq.types.chat.chat_completion_tool_choice_option_param import ChatCompletionToolChoiceOptionParam
 except ImportError as _import_error:
     raise ImportError(

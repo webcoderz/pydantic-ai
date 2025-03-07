@@ -162,7 +162,7 @@ class CohereModel(Model):
         model_request_parameters: ModelRequestParameters,
     ) -> ChatResponse:
         tools = self._get_tools(model_request_parameters)
-        tool_choice = self._map_tool_choice(model_settings, model_request_parameters)
+        tool_choice = self._map_tool_choice(model_settings, model_request_parameters, tools)
         cohere_messages = list(chain(*(self._map_message(m) for m in messages)))
         try:
             return await self.client.chat(

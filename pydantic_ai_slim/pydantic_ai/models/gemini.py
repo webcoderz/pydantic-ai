@@ -208,7 +208,9 @@ class GeminiModel(Model):
 
     @staticmethod
     def _map_tool_choice(
-        model_request_parameters: ModelRequestParameters, tools: _GeminiTools | None
+        model_settings: GeminiModelSettings,
+        model_request_parameters: ModelRequestParameters,
+        tools: _GeminiTools | None,
     ) -> _GeminiToolConfig | None:
         if model_request_parameters.allow_text_result:
             return None
@@ -226,7 +228,7 @@ class GeminiModel(Model):
         model_request_parameters: ModelRequestParameters,
     ) -> AsyncIterator[HTTPResponse]:
         tools = self._get_tools(model_request_parameters)
-        tool_config = self._map_tool_config(model_request_parameters, tools)
+        tool_config = self._map_tool_choice(model_settings, model_request_parameters, tools)
         sys_prompt_parts, contents = await self._message_to_gemini_content(messages)
 
         request_data = _GeminiRequest(contents=contents)
