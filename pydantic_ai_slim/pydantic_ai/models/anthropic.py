@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from json import JSONDecodeError, loads as json_loads
 from typing import Any, Literal, Union, cast, overload
 
-
 from httpx import AsyncClient as AsyncHTTPClient
 from typing_extensions import assert_never
 

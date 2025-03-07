@@ -1,23 +1,13 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-from typing import Literal, Union
+from dataclasses import dataclass
+from typing import Literal
+
 from httpx import Timeout
-from typing_extensions import TypedDict, Required
+from typing_extensions import TypedDict
 
-if TYPE_CHECKING:
-    pass
+from pydantic_ai.tools import Tool, ToolFuncEither
 
-class Function(TypedDict, total=False):
-    name: Required[str]
-    """The name of the function to call."""
-
-
-class ChatCompletionNamedToolChoiceParam(TypedDict, total=False):
-    function: Required[Function]
-
-    type: Required[Literal["function"]]
-    """The type of the tool. Currently, only `function` is supported."""
 
 class ModelSettings(TypedDict, total=False):
     """Settings to configure an LLM.
@@ -143,12 +133,13 @@ class ModelSettings(TypedDict, total=False):
     * Groq
     """
 
+    tool_choice: Literal['none', 'auto', 'required'] | ForcedFunctionToolChoice
+    """Decide the model's behavior regarding tool use.
 
-    tool_choice: Union[
-        Literal["none", "auto", "required"],
-        ChatCompletionNamedToolChoiceParam
-    ]
-    """Whether to require a specific tool to be used.
+    - If `'none'`, the model will not use any tools.
+    - If `'auto'`, the model will decide whether to use a tool or not.
+    - If `'required'`, the model will be forced to use a tool.
+    - If a tool name is provided, the model will use the specified tool.
 
     Supported by:
 
@@ -158,10 +149,25 @@ class ModelSettings(TypedDict, total=False):
     * Groq
     * Cohere
     * Mistral
-    
+    * Bedrock
     """
 
 
+@dataclass
+class ForcedFunctionToolChoice:
+    """A tool choice that forces the model to use a specific function."""
+
+    tool: Tool | ToolFuncEither | str
+    """The tool to call."""
+
+    @property
+    def name(self) -> str:
+        """The name of the tool to call."""
+        if isinstance(self.tool, Tool):
+            return self.tool.name
+        elif isinstance(self.tool, str):
+            return self.tool
+        return self.tool.__name__
 
 
 def merge_model_settings(base: ModelSettings | None, overrides: ModelSettings | None) -> ModelSettings | None:

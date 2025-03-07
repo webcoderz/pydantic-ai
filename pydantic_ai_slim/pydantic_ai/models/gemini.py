@@ -67,11 +67,9 @@ allow any name in the type hints.
 See [the Gemini API docs](https://ai.google.dev/gemini-api/docs/models/gemini#model-variations) for a full list.
 """
 
-FunctionCallConfigMode = Literal["ANY", "NONE", "AUTO"]
 
 class GeminiModelSettings(ModelSettings):
     """Settings used for a Gemini model request."""
-    # This class is a placeholder for any future gemini-specific settings
 
     gemini_safety_settings: list[GeminiSafetySettings]
 
@@ -208,8 +206,9 @@ class GeminiModel(Model):
             tools += [_function_from_abstract_tool(t) for t in model_request_parameters.result_tools]
         return _GeminiTools(function_declarations=tools) if tools else None
 
-    def _get_tool_config(
-        self, model_request_parameters: ModelRequestParameters, tools: _GeminiTools | None
+    @staticmethod
+    def _map_tool_choice(
+        model_request_parameters: ModelRequestParameters, tools: _GeminiTools | None
     ) -> _GeminiToolConfig | None:
         if model_request_parameters.allow_text_result:
             return None
@@ -227,7 +226,7 @@ class GeminiModel(Model):
         model_request_parameters: ModelRequestParameters,
     ) -> AsyncIterator[HTTPResponse]:
         tools = self._get_tools(model_request_parameters)
-        tool_config = self._get_tool_config(model_request_parameters, tools)
+        tool_config = self._map_tool_config(model_request_parameters, tools)
         sys_prompt_parts, contents = await self._message_to_gemini_content(messages)
 
         request_data = _GeminiRequest(contents=contents)
@@ -721,7 +720,12 @@ def _tool_config(function_names: list[str]) -> _GeminiToolConfig:
 
 
 class _GeminiFunctionCallingConfig(TypedDict):
-    mode: Literal['ANY', 'AUTO']
+    """The function calling config for the Gemini API.
+
+    See <https://ai.google.dev/gemini-api/docs/function-calling>
+    """
+
+    mode: Literal['ANY', 'AUTO', 'NONE']
     allowed_function_names: list[str]
 
 

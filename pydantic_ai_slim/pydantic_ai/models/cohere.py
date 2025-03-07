@@ -3,11 +3,13 @@ from __future__ import annotations as _annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from itertools import chain
-from typing import Literal, Union, Any, cast
+from typing import Literal, Union, cast
 
 from cohere import TextAssistantMessageContentItem
 from httpx import AsyncClient as AsyncHTTPClient
 from typing_extensions import assert_never
+
+from pydantic_ai.exceptions import UserError
 
 from .. import ModelHTTPError, result
 from .._utils import guard_tool_call_id as _guard_tool_call_id
@@ -23,7 +25,7 @@ from ..messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from ..settings import ModelSettings
+from ..settings import ForcedFunctionToolChoice, ModelSettings
 from ..tools import ToolDefinition
 from . import (
     Model,
@@ -44,6 +46,7 @@ try:
         ToolV2,
         ToolV2Function,
         UserChatMessageV2,
+        V2ChatRequestToolChoice,
     )
     from cohere.core.api_error import ApiError
     from cohere.v2.client import OMIT
@@ -78,11 +81,9 @@ allow any name in the type hints.
 See [Cohere's docs](https://docs.cohere.com/v2/docs/models) for a list of all available models.
 """
 
-V2ChatRequestToolChoice = Union[Literal["REQUIRED", "NONE"], Any]
 
 class CohereModelSettings(ModelSettings):
     """Settings used for a Cohere model request."""
-
 
     # This class is a placeholder for any future cohere-specific settings
 
@@ -161,7 +162,7 @@ class CohereModel(Model):
         model_request_parameters: ModelRequestParameters,
     ) -> ChatResponse:
         tools = self._get_tools(model_request_parameters)
-        tool_choice = self._get_tool_choice(model_settings, model_request_parameters, tools)
+        tool_choice = self._map_tool_choice(model_settings, model_request_parameters)
         cohere_messages = list(chain(*(self._map_message(m) for m in messages)))
         try:
             return await self.client.chat(
@@ -229,29 +230,32 @@ class CohereModel(Model):
             tools += [self._map_tool_definition(r) for r in model_request_parameters.result_tools]
         return tools
 
+    @staticmethod
+    def _map_tool_choice(
+        model_settings: CohereModelSettings, model_request_parameters: ModelRequestParameters, tools: list[ToolV2]
+    ) -> V2ChatRequestToolChoice | None:
+        """Determine the `tool_choice` setting for the model.
 
-    def _get_tool_choice(self, model_settings: CohereModelSettings,model_request_parameters: ModelRequestParameters,  tools:list[ToolV2]) -> V2ChatRequestToolChoice | None:
-        """Determine the tool_choice setting for the model.
-
-        Allowed values in model_settings:
-        - 'REQUIRED': The model must use at least one tool.
-        - 'NONE': The model is forced not to use a tool.
-        If not provided, the model is free to choose:
-        - If no tools are available, leave unspecified.
-        - If text responses are disallowed, force tool usage ('REQUIRED').
-        - If text responses are allowed, leave unspecified (free to choose).
+        Cohere only supports `'REQUIRED'` and `'NONE'` for tool choice.
+        See [Cohere's docs](https://docs.cohere.com/v2/docs/tool-use-usage-patterns#forcing-tool-usage) for more details.
         """
-        tool_choice: V2ChatRequestToolChoice | None = getattr(model_settings, 'tool_choice', None)
+        tool_choice = model_settings.get('tool_choice', 'auto')
 
-        if tool_choice is None:
-            if not tools:
-                tool_choice = None
-            elif not model_request_parameters.allow_text_result:
-                tool_choice = 'REQUIRED'
-            else:
-                tool_choice = None
-
-        return tool_choice
+        if tool_choice == 'none':
+            return 'NONE'
+        elif tool_choice == 'auto' and tools and not model_request_parameters.allow_text_result:
+            return 'REQUIRED'
+        elif tool_choice == 'required':
+            return 'REQUIRED'
+        elif isinstance(tool_choice, ForcedFunctionToolChoice):
+            raise UserError(
+                'Cohere does not support forcing a specific tool. '
+                'Please choose a different value for the `tool_choice` parameter in the model settings.'
+            )
+        elif tool_choice == 'auto':
+            return None
+        else:
+            assert_never(tool_choice)
 
     @staticmethod
     def _map_tool_call(t: ToolCallPart) -> ToolCallV2:
