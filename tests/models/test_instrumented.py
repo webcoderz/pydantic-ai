@@ -56,6 +56,10 @@ class MyModel(Model):
     def model_name(self) -> str:
         return 'my_model'
 
+    @property
+    def base_url(self) -> str:
+        return 'https://example.com:8000/foo'
+
     async def request(
         self,
         messages: list[ModelMessage],
@@ -146,6 +150,8 @@ async def test_instrumented_model(capfire: CaptureLogfire):
                     'gen_ai.operation.name': 'chat',
                     'gen_ai.system': 'my_system',
                     'gen_ai.request.model': 'my_model',
+                    'server.address': 'example.com',
+                    'server.port': 8000,
                     'gen_ai.request.temperature': 1,
                     'logfire.msg': 'chat my_model',
                     'logfire.span_type': 'span',
@@ -190,7 +196,7 @@ async def test_instrumented_model(capfire: CaptureLogfire):
                 'trace_flags': 1,
             },
             {
-                'body': {'content': 'tool_return_content', 'role': 'tool', 'id': 'tool_call_3'},
+                'body': {'content': 'tool_return_content', 'role': 'tool', 'id': 'tool_call_3', 'name': 'tool3'},
                 'severity_number': 9,
                 'severity_text': None,
                 'attributes': {
@@ -213,6 +219,7 @@ Fix the errors and try again.\
 """,
                     'role': 'tool',
                     'id': 'tool_call_4',
+                    'name': 'tool4',
                 },
                 'severity_number': 9,
                 'severity_text': None,
@@ -365,6 +372,8 @@ async def test_instrumented_model_stream(capfire: CaptureLogfire):
                     'gen_ai.operation.name': 'chat',
                     'gen_ai.system': 'my_system',
                     'gen_ai.request.model': 'my_model',
+                    'server.address': 'example.com',
+                    'server.port': 8000,
                     'gen_ai.request.temperature': 1,
                     'logfire.msg': 'chat my_model',
                     'logfire.span_type': 'span',
@@ -446,6 +455,8 @@ async def test_instrumented_model_stream_break(capfire: CaptureLogfire):
                     'gen_ai.operation.name': 'chat',
                     'gen_ai.system': 'my_system',
                     'gen_ai.request.model': 'my_model',
+                    'server.address': 'example.com',
+                    'server.port': 8000,
                     'gen_ai.request.temperature': 1,
                     'logfire.msg': 'chat my_model',
                     'logfire.span_type': 'span',
@@ -546,6 +557,8 @@ async def test_instrumented_model_attributes_mode(capfire: CaptureLogfire):
                     'gen_ai.operation.name': 'chat',
                     'gen_ai.system': 'my_system',
                     'gen_ai.request.model': 'my_model',
+                    'server.address': 'example.com',
+                    'server.port': 8000,
                     'gen_ai.request.temperature': 1,
                     'logfire.msg': 'chat my_model',
                     'logfire.span_type': 'span',
@@ -573,6 +586,7 @@ async def test_instrumented_model_attributes_mode(capfire: CaptureLogfire):
                                     'event.name': 'gen_ai.tool.message',
                                     'content': 'tool_return_content',
                                     'role': 'tool',
+                                    'name': 'tool3',
                                     'id': 'tool_call_3',
                                     'gen_ai.message.index': 0,
                                     'gen_ai.system': 'my_system',
@@ -585,6 +599,7 @@ retry_prompt1
 Fix the errors and try again.\
 """,
                                     'role': 'tool',
+                                    'name': 'tool4',
                                     'id': 'tool_call_4',
                                     'gen_ai.message.index': 0,
                                     'gen_ai.system': 'my_system',

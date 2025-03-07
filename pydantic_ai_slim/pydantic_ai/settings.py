@@ -37,6 +37,7 @@ class ModelSettings(TypedDict, total=False):
     * Groq
     * Cohere
     * Mistral
+    * Bedrock
     """
 
     temperature: float
@@ -55,6 +56,7 @@ class ModelSettings(TypedDict, total=False):
     * Groq
     * Cohere
     * Mistral
+    * Bedrock
     """
 
     top_p: float
@@ -72,6 +74,7 @@ class ModelSettings(TypedDict, total=False):
     * Groq
     * Cohere
     * Mistral
+    * Bedrock
     """
 
     timeout: float | Timeout
