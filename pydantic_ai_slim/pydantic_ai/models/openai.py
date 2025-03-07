@@ -324,7 +324,9 @@ class OpenAIModel(Model):
 
         if tool_choice == 'auto' and tools and not model_request_parameters.allow_text_result:
             return 'required'
-        elif tool_choice in ('none', 'required', 'auto'):
+        elif tool_choice == 'auto':
+            return None
+        elif tool_choice in ('none', 'required'):
             return tool_choice
         elif isinstance(tool_choice, ForcedFunctionToolChoice):
             return {'type': 'function', 'function': {'name': tool_choice.name}}

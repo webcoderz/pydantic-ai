@@ -241,19 +241,17 @@ class CohereModel(Model):
         """
         tool_choice = model_settings.get('tool_choice', 'auto')
 
-        if tool_choice == 'none':
-            return 'NONE'
-        elif tool_choice == 'auto' and tools and not model_request_parameters.allow_text_result:
+        if tool_choice == 'auto' and tools and not model_request_parameters.allow_text_result:
             return 'REQUIRED'
-        elif tool_choice == 'required':
-            return 'REQUIRED'
+        elif tool_choice == 'auto':
+            return None
+        elif tool_choice in ('none', 'required'):
+            return tool_choice.upper()
         elif isinstance(tool_choice, ForcedFunctionToolChoice):
             raise UserError(
                 'Cohere does not support forcing a specific tool. '
                 'Please choose a different value for the `tool_choice` parameter in the model settings.'
             )
-        elif tool_choice == 'auto':
-            return None
         else:
             assert_never(tool_choice)
 
