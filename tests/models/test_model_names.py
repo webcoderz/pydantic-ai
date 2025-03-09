@@ -10,7 +10,6 @@ from ..conftest import try_import
 
 with try_import() as imports_successful:
     from pydantic_ai.models.anthropic import AnthropicModelName
-    from pydantic_ai.models.bedrock import BedrockModelName
     from pydantic_ai.models.cohere import CohereModelName
     from pydantic_ai.models.gemini import GeminiModelName
     from pydantic_ai.models.groq import GroqModelName
@@ -42,7 +41,6 @@ def test_known_model_names():
     openai_names = [f'openai:{n}' for n in get_model_names(OpenAIModelName)] + [
         n for n in get_model_names(OpenAIModelName) if n.startswith('o1') or n.startswith('gpt') or n.startswith('o3')
     ]
-    bedrock_names = [f'bedrock:{n}' for n in get_model_names(BedrockModelName)]
     deepseek_names = ['deepseek:deepseek-chat', 'deepseek:deepseek-reasoner']
     extra_names = ['test']
 
@@ -53,7 +51,6 @@ def test_known_model_names():
         + groq_names
         + mistral_names
         + openai_names
-        + bedrock_names
         + deepseek_names
         + extra_names
     )

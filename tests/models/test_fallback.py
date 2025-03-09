@@ -38,7 +38,6 @@ def test_init() -> None:
         'FallBackModel[function:failure_response:, function:success_response:]'
     )
     assert fallback_model.system is None
-    assert fallback_model.base_url is None
 
 
 def test_first_successful() -> None:

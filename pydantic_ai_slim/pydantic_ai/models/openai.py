@@ -188,10 +188,6 @@ class OpenAIModel(Model):
         self.system_prompt_role = system_prompt_role
         self._system = system
 
-    @property
-    def base_url(self) -> str:
-        return str(self.client.base_url)
-
     async def request(
         self,
         messages: list[ModelMessage],

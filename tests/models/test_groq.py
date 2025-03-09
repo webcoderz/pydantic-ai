@@ -61,7 +61,6 @@ def test_init():
     assert m.client.api_key == 'foobar'
     assert m.model_name == 'llama-3.3-70b-versatile'
     assert m.system == 'groq'
-    assert m.base_url == 'https://api.groq.com'
 
 
 @dataclass
