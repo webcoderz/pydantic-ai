@@ -315,21 +315,25 @@ class OpenAIModel(Model):
 
     @staticmethod
     def _map_tool_choice(
-        model_settings: OpenAIModelSettings,
+        model_settings: ModelSettings,
         model_request_parameters: ModelRequestParameters,
         tools: list[chat.ChatCompletionToolParam],
     ) -> ChatCompletionToolChoiceOptionParam | None:
         """Determine the `tool_choice` setting for the model."""
         tool_choice = model_settings.get('tool_choice', 'auto')
 
-        if tool_choice == 'auto' and tools and not model_request_parameters.allow_text_result:
-            return 'required'
-        elif tool_choice == 'auto':
-            return None
-        elif tool_choice in ('none', 'required'):
-            return cast(ChatCompletionToolChoiceOptionParam, tool_choice)
+        if tool_choice == 'auto':
+            if tools and not model_request_parameters.allow_text_result:
+                return {"type": "function", "function": {"name": tools[0]['function']['name']}}
+            return 'auto'
+        elif tool_choice == 'none':
+            return 'none'
+        elif tool_choice == 'required':
+            if tools:
+                return {"type": "function", "function": {"name": tools[0]['function']['name']}}
+            raise ValueError("Tool choice set to 'required' but no tools provided.")
         elif isinstance(tool_choice, ForcedFunctionToolChoice):
-            return {'type': 'function', 'function': {'name': tool_choice.name}}
+            return {"type": "function", "function": {"name": tool_choice.name}}
         else:
             assert_never(tool_choice)
 
