@@ -14,6 +14,7 @@ from typing_extensions import assert_never, deprecated
 from pydantic_ai.providers import Provider, infer_provider
 
 from .. import ModelHTTPError, UnexpectedModelBehavior, _utils, usage
+from ..settings import ChatCompletionNamedToolChoiceParam
 from .._utils import guard_tool_call_id as _guard_tool_call_id
 from ..messages import (
     AudioUrl,
@@ -31,7 +32,7 @@ from ..messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from ..settings import ForcedFunctionToolChoice, ModelSettings
+from ..settings import ModelSettings
 from ..tools import ToolDefinition
 from . import (
     Model,
@@ -50,7 +51,6 @@ try:
         ChatCompletionContentPartInputAudioParam,
         ChatCompletionContentPartParam,
         ChatCompletionContentPartTextParam,
-        ChatCompletionToolChoiceOptionParam,
     )
     from openai.types.chat.chat_completion_content_part_image_param import ImageURL
     from openai.types.chat.chat_completion_content_part_input_audio_param import InputAudio
@@ -188,10 +188,6 @@ class OpenAIModel(Model):
         self.system_prompt_role = system_prompt_role
         self._system = system
 
-    @property
-    def base_url(self) -> str:
-        return str(self.client.base_url)
-
     async def request(
         self,
         messages: list[ModelMessage],
@@ -256,7 +252,7 @@ class OpenAIModel(Model):
         model_request_parameters: ModelRequestParameters,
     ) -> chat.ChatCompletion | AsyncStream[ChatCompletionChunk]:
         tools = self._get_tools(model_request_parameters)
-        tool_choice = self._map_tool_choice(model_settings, model_request_parameters, tools)
+        tool_choice = self._get_tool_choice(model_settings, model_request_parameters, tools)
 
         openai_messages: list[chat.ChatCompletionMessageParam] = []
         for m in messages:
@@ -313,29 +309,22 @@ class OpenAIModel(Model):
             _timestamp=datetime.fromtimestamp(first_chunk.created, tz=timezone.utc),
         )
 
-    @staticmethod
-    def _map_tool_choice(
-        model_settings: ModelSettings,
-        model_request_parameters: ModelRequestParameters,
-        tools: list[chat.ChatCompletionToolParam],
-    ) -> ChatCompletionToolChoiceOptionParam | None:
-        """Determine the `tool_choice` setting for the model."""
-        tool_choice = model_settings.get('tool_choice', 'auto')
+    def _get_tool_choice(self, model_settings: OpenAIModelSettings, model_request_parameters: ModelRequestParameters, tools:list[chat.ChatCompletionToolParam] ) ->  Literal['none', 'required', 'auto'] | None:
+        """Get tool choice for the model.
 
-        if tool_choice == 'auto':
-            if tools and not model_request_parameters.allow_text_result:
-                return {"type": "function", "function": {"name": tools[0]['function']['name']}}
-            return 'auto'
-        elif tool_choice == 'none':
-            return 'none'
-        elif tool_choice == 'required':
-            if tools:
-                return {"type": "function", "function": {"name": tools[0]['function']['name']}}
-            raise ValueError("Tool choice set to 'required' but no tools provided.")
-        elif isinstance(tool_choice, ForcedFunctionToolChoice):
-            return {"type": "function", "function": {"name": tool_choice.name}}
-        else:
-            assert_never(tool_choice)
+        - "auto": Default mode. Model decides if it uses the tool or not.
+        - "none": Prevents tool use.
+        - "required": Forces tool use.
+        """
+        tool_choice: Union[Literal['none', 'required', 'auto'] , ChatCompletionNamedToolChoiceParam ]| None = getattr(model_settings, 'tool_choice', None)
+
+        if tool_choice is None:
+            if not tools:
+                tool_choice = None
+            elif not model_request_parameters.allow_text_result:
+                tool_choice = 'required'
+            else:
+                tool_choice = 'auto'
 
     def _get_tools(self, model_request_parameters: ModelRequestParameters) -> list[chat.ChatCompletionToolParam]:
         tools = [self._map_tool_definition(r) for r in model_request_parameters.function_tools]
