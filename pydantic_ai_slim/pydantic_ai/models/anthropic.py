@@ -9,13 +9,14 @@ from datetime import datetime, timezone
 from json import JSONDecodeError, loads as json_loads
 from typing import Any, Literal, Union, cast, overload
 
-from httpx import AsyncClient as AsyncHTTPClient
+from anthropic.types import DocumentBlockParam
 from typing_extensions import assert_never
 
 from .. import ModelHTTPError, UnexpectedModelBehavior, _utils, usage
 from .._utils import guard_tool_call_id as _guard_tool_call_id
 from ..messages import (
     BinaryContent,
+    DocumentUrl,
     ImageUrl,
     ModelMessage,
     ModelRequest,
@@ -29,24 +30,21 @@ from ..messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from ..providers import Provider, infer_provider
 from ..settings import ForcedFunctionToolChoice, ModelSettings
 from ..tools import ToolDefinition
-from . import (
-    Model,
-    ModelRequestParameters,
-    StreamedResponse,
-    cached_async_http_client,
-    check_allow_model_requests,
-)
+from . import Model, ModelRequestParameters, StreamedResponse, cached_async_http_client, check_allow_model_requests
 
 try:
     from anthropic import NOT_GIVEN, APIStatusError, AsyncAnthropic, AsyncStream
     from anthropic.types import (
+        Base64PDFSourceParam,
         ContentBlock,
         ImageBlockParam,
         Message as AnthropicMessage,
         MessageParam,
         MetadataParam,
+        PlainTextSourceParam,
         RawContentBlockDeltaEvent,
         RawContentBlockStartEvent,
         RawContentBlockStopEvent,
@@ -66,7 +64,7 @@ try:
 except ImportError as _import_error:
     raise ImportError(
         'Please install `anthropic` to use the Anthropic model, '
-        "you can use the `anthropic` optional group — `pip install 'pydantic-ai-slim[anthropic]'`"
+        'you can use the `anthropic` optional group — `pip install "pydantic-ai-slim[anthropic]"`'
     ) from _import_error
 
 LatestAnthropicModelNames = Literal[
@@ -87,7 +85,10 @@ See [the Anthropic docs](https://docs.anthropic.com/en/docs/about-claude/models)
 
 
 class AnthropicModelSettings(ModelSettings):
-    """Settings used for an Anthropic model request."""
+    """Settings used for an Anthropic model request.
+
+    ALL FIELDS MUST BE `anthropic_` PREFIXED SO YOU CAN MERGE THEM WITH OTHER MODELS.
+    """
 
     anthropic_metadata: MetadataParam
     """An object describing metadata about the request.
@@ -111,37 +112,27 @@ class AnthropicModel(Model):
     client: AsyncAnthropic = field(repr=False)
 
     _model_name: AnthropicModelName = field(repr=False)
-    _system: str | None = field(default='anthropic', repr=False)
+    _system: str = field(default='anthropic', repr=False)
 
     def __init__(
         self,
         model_name: AnthropicModelName,
         *,
-        api_key: str | None = None,
-        anthropic_client: AsyncAnthropic | None = None,
-        http_client: AsyncHTTPClient | None = None,
+        provider: Literal['anthropic'] | Provider[AsyncAnthropic] = 'anthropic',
     ):
         """Initialize an Anthropic model.
 
         Args:
             model_name: The name of the Anthropic model to use. List of model names available
                 [here](https://docs.anthropic.com/en/docs/about-claude/models).
-            api_key: The API key to use for authentication, if not provided, the `ANTHROPIC_API_KEY` environment variable
-                will be used if available.
-            anthropic_client: An existing
-                [`AsyncAnthropic`](https://github.com/anthropics/anthropic-sdk-python?tab=readme-ov-file#async-usage)
-                client to use, if provided, `api_key` and `http_client` must be `None`.
-            http_client: An existing `httpx.AsyncClient` to use for making HTTP requests.
+            provider: The provider to use for the Anthropic API. Can be either the string 'anthropic' or an
+                instance of `Provider[AsyncAnthropic]`. If not provided, the other parameters will be used.
         """
         self._model_name = model_name
-        if anthropic_client is not None:
-            assert http_client is None, 'Cannot provide both `anthropic_client` and `http_client`'
-            assert api_key is None, 'Cannot provide both `anthropic_client` and `api_key`'
-            self.client = anthropic_client
-        elif http_client is not None:
-            self.client = AsyncAnthropic(api_key=api_key, http_client=http_client)
-        else:
-            self.client = AsyncAnthropic(api_key=api_key, http_client=cached_async_http_client())
+
+        if isinstance(provider, str):
+            provider = infer_provider(provider)
+        self.client = provider.client
 
     @property
     def base_url(self) -> str:
@@ -179,7 +170,7 @@ class AnthropicModel(Model):
         return self._model_name
 
     @property
-    def system(self) -> str | None:
+    def system(self) -> str:
         """The system / model provider."""
         return self._system
 
@@ -302,7 +293,9 @@ class AnthropicModel(Model):
         anthropic_messages: list[MessageParam] = []
         for m in messages:
             if isinstance(m, ModelRequest):
-                user_content_params: list[ToolResultBlockParam | TextBlockParam | ImageBlockParam] = []
+                user_content_params: list[
+                    ToolResultBlockParam | TextBlockParam | ImageBlockParam | DocumentBlockParam
+                ] = []
                 for request_part in m.parts:
                     if isinstance(request_part, SystemPromptPart):
                         system_prompt += request_part.content
@@ -311,7 +304,7 @@ class AnthropicModel(Model):
                             user_content_params.append(content)
                     elif isinstance(request_part, ToolReturnPart):
                         tool_result_block_param = ToolResultBlockParam(
-                            tool_use_id=_guard_tool_call_id(t=request_part, model_source='Anthropic'),
+                            tool_use_id=_guard_tool_call_id(t=request_part),
                             type='tool_result',
                             content=request_part.model_response_str(),
                             is_error=False,
@@ -322,7 +315,7 @@ class AnthropicModel(Model):
                             retry_param = TextBlockParam(type='text', text=request_part.model_response())
                         else:
                             retry_param = ToolResultBlockParam(
-                                tool_use_id=_guard_tool_call_id(t=request_part, model_source='Anthropic'),
+                                tool_use_id=_guard_tool_call_id(t=request_part),
                                 type='tool_result',
                                 content=request_part.model_response(),
                                 is_error=True,
@@ -336,7 +329,7 @@ class AnthropicModel(Model):
                         assistant_content_params.append(TextBlockParam(text=response_part.content, type='text'))
                     else:
                         tool_use_block_param = ToolUseBlockParam(
-                            id=_guard_tool_call_id(t=response_part, model_source='Anthropic'),
+                            id=_guard_tool_call_id(t=response_part),
                             type='tool_use',
                             name=response_part.tool_name,
                             input=response_part.args_as_dict(),
@@ -348,7 +341,9 @@ class AnthropicModel(Model):
         return system_prompt, anthropic_messages
 
     @staticmethod
-    async def _map_user_prompt(part: UserPromptPart) -> AsyncGenerator[ImageBlockParam | TextBlockParam]:
+    async def _map_user_prompt(
+        part: UserPromptPart,
+    ) -> AsyncGenerator[ImageBlockParam | TextBlockParam | DocumentBlockParam]:
         if isinstance(part.content, str):
             yield TextBlockParam(text=part.content, type='text')
         else:
@@ -361,8 +356,17 @@ class AnthropicModel(Model):
                             source={'data': io.BytesIO(item.data), 'media_type': item.media_type, 'type': 'base64'},  # type: ignore
                             type='image',
                         )
+                    elif item.media_type == 'application/pdf':
+                        yield DocumentBlockParam(
+                            source=Base64PDFSourceParam(
+                                data=io.BytesIO(item.data),
+                                media_type='application/pdf',
+                                type='base64',
+                            ),
+                            type='document',
+                        )
                     else:
-                        raise RuntimeError('Only images are supported for binary content')
+                        raise RuntimeError('Only images and PDFs are supported for binary content')
                 elif isinstance(item, ImageUrl):
                     try:
                         response = await cached_async_http_client().get(item.url)
@@ -393,6 +397,25 @@ class AnthropicModel(Model):
                             )
                         else:  # pragma: no cover
                             raise RuntimeError(f'Unsupported image type: {mime_type}')
+                elif isinstance(item, DocumentUrl):
+                    response = await cached_async_http_client().get(item.url)
+                    response.raise_for_status()
+                    if item.media_type == 'application/pdf':
+                        yield DocumentBlockParam(
+                            source=Base64PDFSourceParam(
+                                data=io.BytesIO(response.content),
+                                media_type=item.media_type,
+                                type='base64',
+                            ),
+                            type='document',
+                        )
+                    elif item.media_type == 'text/plain':
+                        yield DocumentBlockParam(
+                            source=PlainTextSourceParam(data=response.text, media_type=item.media_type, type='text'),
+                            type='document',
+                        )
+                    else:  # pragma: no cover
+                        raise RuntimeError(f'Unsupported media type: {item.media_type}')
                 else:
                     raise RuntimeError(f'Unsupported content type: {type(item)}')
 

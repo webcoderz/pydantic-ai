@@ -72,6 +72,7 @@ print(dice_result.all_messages())
         parts=[
             SystemPromptPart(
                 content="You're a dice game, you should roll the die and see if the number you get back matches the user's guess. If so, tell them they're a winner. Use the player's name in the response.",
+                timestamp=datetime.datetime(...),
                 dynamic_ref=None,
                 part_kind='system-prompt',
             ),
@@ -86,7 +87,10 @@ print(dice_result.all_messages())
     ModelResponse(
         parts=[
             ToolCallPart(
-                tool_name='roll_die', args={}, tool_call_id=None, part_kind='tool-call'
+                tool_name='roll_die',
+                args={},
+                tool_call_id='pyd_ai_tool_call_id',
+                part_kind='tool-call',
             )
         ],
         model_name='gemini-1.5-flash',
@@ -98,7 +102,7 @@ print(dice_result.all_messages())
             ToolReturnPart(
                 tool_name='roll_die',
                 content='4',
-                tool_call_id=None,
+                tool_call_id='pyd_ai_tool_call_id',
                 timestamp=datetime.datetime(...),
                 part_kind='tool-return',
             )
@@ -110,7 +114,7 @@ print(dice_result.all_messages())
             ToolCallPart(
                 tool_name='get_player_name',
                 args={},
-                tool_call_id=None,
+                tool_call_id='pyd_ai_tool_call_id',
                 part_kind='tool-call',
             )
         ],
@@ -123,7 +127,7 @@ print(dice_result.all_messages())
             ToolReturnPart(
                 tool_name='get_player_name',
                 content='Anne',
-                tool_call_id=None,
+                tool_call_id='pyd_ai_tool_call_id',
                 timestamp=datetime.datetime(...),
                 part_kind='tool-return',
             )
@@ -190,6 +194,12 @@ import random
 
 from pydantic_ai import Agent, RunContext, Tool
 
+system_prompt = """\
+You're a dice game, you should roll the die and see if the number
+you get back matches the user's guess. If so, tell them they're a winner.
+Use the player's name in the response.
+"""
+
 
 def roll_die() -> str:
     """Roll a six-sided die and return the result."""
@@ -205,6 +215,7 @@ agent_a = Agent(
     'google-gla:gemini-1.5-flash',
     deps_type=str,
     tools=[roll_die, get_player_name],  # (1)!
+    system_prompt=system_prompt,
 )
 agent_b = Agent(
     'google-gla:gemini-1.5-flash',
@@ -213,9 +224,15 @@ agent_b = Agent(
         Tool(roll_die, takes_ctx=False),
         Tool(get_player_name, takes_ctx=True),
     ],
+    system_prompt=system_prompt,
 )
-dice_result = agent_b.run_sync('My guess is 4', deps='Anne')
-print(dice_result.data)
+
+dice_result = {}
+dice_result['a'] = agent_a.run_sync('My guess is 6', deps='Yashar')
+dice_result['b'] = agent_b.run_sync('My guess is 4', deps='Anne')
+print(dice_result['a'].data)
+#> Tough luck, Yashar, you rolled a 4. Better luck next time.
+print(dice_result['b'].data)
 #> Congratulations Anne, you guessed correctly! You're a winner!
 ```
 
@@ -265,19 +282,18 @@ def print_schema(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse
     print(tool.parameters_json_schema)
     """
     {
+        'additionalProperties': False,
         'properties': {
-            'a': {'description': 'apple pie', 'title': 'A', 'type': 'integer'},
-            'b': {'description': 'banana cake', 'title': 'B', 'type': 'string'},
+            'a': {'description': 'apple pie', 'type': 'integer'},
+            'b': {'description': 'banana cake', 'type': 'string'},
             'c': {
                 'additionalProperties': {'items': {'type': 'number'}, 'type': 'array'},
                 'description': 'carrot smoothie',
-                'title': 'C',
                 'type': 'object',
             },
         },
         'required': ['a', 'b', 'c'],
         'type': 'object',
-        'additionalProperties': False,
     }
     """
     return ModelResponse(parts=[TextPart('foobar')])
@@ -328,9 +344,9 @@ print(test_model.last_model_request_parameters.function_tools)
         description='This is a Foobar',
         parameters_json_schema={
             'properties': {
-                'x': {'title': 'X', 'type': 'integer'},
-                'y': {'title': 'Y', 'type': 'string'},
-                'z': {'default': 3.14, 'title': 'Z', 'type': 'number'},
+                'x': {'type': 'integer'},
+                'y': {'type': 'string'},
+                'z': {'default': 3.14, 'type': 'number'},
             },
             'required': ['x', 'y'],
             'title': 'Foobar',
@@ -432,16 +448,12 @@ print(test_model.last_model_request_parameters.function_tools)
         name='greet',
         description='',
         parameters_json_schema={
+            'additionalProperties': False,
             'properties': {
-                'name': {
-                    'title': 'Name',
-                    'type': 'string',
-                    'description': 'Name of the human to greet.',
-                }
+                'name': {'type': 'string', 'description': 'Name of the human to greet.'}
             },
             'required': ['name'],
             'type': 'object',
-            'additionalProperties': False,
         },
         outer_typed_dict_key=None,
     )

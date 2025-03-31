@@ -47,7 +47,7 @@ connection and authentication to the underlying service.
 To use OpenAI models, you need to either install [`pydantic-ai`](install.md), or install [`pydantic-ai-slim`](install.md#slim-install) with the `openai` optional group:
 
 ```bash
-pip/uv-add 'pydantic-ai-slim[openai]'
+pip/uv-add "pydantic-ai-slim[openai]"
 ```
 
 ### Configuration
@@ -135,7 +135,7 @@ agent = Agent(model)
 To use [`AnthropicModel`][pydantic_ai.models.anthropic.AnthropicModel] models, you need to either install [`pydantic-ai`](install.md), or install [`pydantic-ai-slim`](install.md#slim-install) with the `anthropic` optional group:
 
 ```bash
-pip/uv-add 'pydantic-ai-slim[anthropic]'
+pip/uv-add "pydantic-ai-slim[anthropic]"
 ```
 
 ### Configuration
@@ -172,15 +172,38 @@ agent = Agent(model)
 ...
 ```
 
-### `api_key` argument
+### `provider` argument
 
-If you don't want to or can't set the environment variable, you can pass it at runtime via the [`api_key` argument][pydantic_ai.models.anthropic.AnthropicModel.__init__]:
+You can provide a custom [`Provider`][pydantic_ai.providers.Provider] via the [`provider` argument][pydantic_ai.models.anthropic.AnthropicModel.__init__]:
 
-```py title="anthropic_model_api_key.py"
+```py title="anthropic_model_provider.py"
 from pydantic_ai import Agent
 from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
 
-model = AnthropicModel('claude-3-5-sonnet-latest', api_key='your-api-key')
+model = AnthropicModel(
+    'claude-3-5-sonnet-latest', provider=AnthropicProvider(api_key='your-api-key')
+)
+agent = Agent(model)
+...
+```
+
+### Custom HTTP Client
+
+You can customize the `AnthropicProvider` with a custom `httpx.AsyncClient`:
+
+```py title="anthropic_model_custom_provider.py"
+from httpx import AsyncClient
+
+from pydantic_ai import Agent
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
+
+custom_http_client = AsyncClient(timeout=30)
+model = AnthropicModel(
+    'claude-3-5-sonnet-latest',
+    provider=AnthropicProvider(api_key='your-api-key', http_client=custom_http_client),
+)
 agent = Agent(model)
 ...
 ```
@@ -275,7 +298,7 @@ To use the `google-vertex` provider with [`GeminiModel`][pydantic_ai.models.gemi
 [`pydantic-ai`](install.md), or install [`pydantic-ai-slim`](install.md#slim-install) with the `vertexai` optional group:
 
 ```bash
-pip/uv-add 'pydantic-ai-slim[vertexai]'
+pip/uv-add "pydantic-ai-slim[vertexai]"
 ```
 
 ### Configuration
@@ -336,6 +359,26 @@ agent = Agent(model)
 ...
 ```
 
+Alternatively, if you already have the service account information in memory, you can pass it as a dictionary:
+
+```python {title="vertexai_service_account.py" hl_lines="7-9"}
+import json
+
+from pydantic_ai import Agent
+from pydantic_ai.models.gemini import GeminiModel
+from pydantic_ai.providers.google_vertex import GoogleVertexProvider
+
+service_account_info = json.loads(
+    '{"type": "service_account", "project_id": "my-project-id"}'
+)
+model = GeminiModel(
+    'gemini-2.0-flash',
+    provider=GoogleVertexProvider(service_account_info=service_account_info),
+)
+agent = Agent(model)
+...
+```
+
 ### Customising region
 
 Whichever way you authenticate, you can specify which region requests will be sent to via the [`region` argument][pydantic_ai.providers.google_vertex.GoogleVertexProvider].
@@ -377,7 +420,7 @@ agent = Agent(model)
 To use [`GroqModel`][pydantic_ai.models.groq.GroqModel], you need to either install [`pydantic-ai`](install.md), or install [`pydantic-ai-slim`](install.md#slim-install) with the `groq` optional group:
 
 ```bash
-pip/uv-add 'pydantic-ai-slim[groq]'
+pip/uv-add "pydantic-ai-slim[groq]"
 ```
 
 ### Configuration
@@ -414,15 +457,38 @@ agent = Agent(model)
 ...
 ```
 
-### `api_key` argument
+### `provider` argument
 
-If you don't want to or can't set the environment variable, you can pass it at runtime via the [`api_key` argument][pydantic_ai.models.groq.GroqModel.__init__]:
+You can provide a custom [`Provider`][pydantic_ai.providers.Provider] via the
+[`provider` argument][pydantic_ai.models.groq.GroqModel.__init__]:
 
-```python {title="groq_model_api_key.py"}
+```python {title="groq_model_provider.py"}
 from pydantic_ai import Agent
 from pydantic_ai.models.groq import GroqModel
+from pydantic_ai.providers.groq import GroqProvider
 
-model = GroqModel('llama-3.3-70b-versatile', api_key='your-api-key')
+model = GroqModel(
+    'llama-3.3-70b-versatile', provider=GroqProvider(api_key='your-api-key')
+)
+agent = Agent(model)
+...
+```
+
+You can also customize the [`GroqProvider`][pydantic_ai.providers.groq.GroqProvider] with a
+custom `httpx.AsyncHTTPClient`:
+
+```python {title="groq_model_custom_provider.py"}
+from httpx import AsyncClient
+
+from pydantic_ai import Agent
+from pydantic_ai.models.groq import GroqModel
+from pydantic_ai.providers.groq import GroqProvider
+
+custom_http_client = AsyncClient(timeout=30)
+model = GroqModel(
+    'llama-3.3-70b-versatile',
+    provider=GroqProvider(api_key='your-api-key', http_client=custom_http_client),
+)
 agent = Agent(model)
 ...
 ```
@@ -434,14 +500,14 @@ agent = Agent(model)
 To use [`MistralModel`][pydantic_ai.models.mistral.MistralModel], you need to either install [`pydantic-ai`](install.md), or install [`pydantic-ai-slim`](install.md#slim-install) with the `mistral` optional group:
 
 ```bash
-pip/uv-add 'pydantic-ai-slim[mistral]'
+pip/uv-add "pydantic-ai-slim[mistral]"
 ```
 
 ### Configuration
 
 To use [Mistral](https://mistral.ai) through their API, go to [console.mistral.ai/api-keys/](https://console.mistral.ai/api-keys/) and follow your nose until you find the place to generate an API key.
 
-[`MistralModelName`][pydantic_ai.models.mistral.MistralModelName] contains a list of the most popular Mistral models.
+[`LatestMistralModelNames`][pydantic_ai.models.mistral.LatestMistralModelNames] contains a list of the most popular Mistral models.
 
 ### Environment variable
 
@@ -471,15 +537,37 @@ agent = Agent(model)
 ...
 ```
 
-### `api_key` argument
+### `provider` argument
 
-If you don't want to or can't set the environment variable, you can pass it at runtime via the [`api_key` argument][pydantic_ai.models.mistral.MistralModel.__init__]:
+You can provide a custom [`Provider`][pydantic_ai.providers.Provider] via the
+[`provider` argument][pydantic_ai.models.mistral.MistralModel.__init__]:
 
-```python {title="mistral_model_api_key.py"}
+```python {title="groq_model_provider.py"}
 from pydantic_ai import Agent
 from pydantic_ai.models.mistral import MistralModel
+from pydantic_ai.providers.mistral import MistralProvider
 
-model = MistralModel('mistral-small-latest', api_key='your-api-key')
+model = MistralModel(
+    'mistral-large-latest', provider=MistralProvider(api_key='your-api-key')
+)
+agent = Agent(model)
+...
+```
+
+You can also customize the provider with a custom `httpx.AsyncHTTPClient`:
+
+```python {title="groq_model_custom_provider.py"}
+from httpx import AsyncClient
+
+from pydantic_ai import Agent
+from pydantic_ai.models.mistral import MistralModel
+from pydantic_ai.providers.mistral import MistralProvider
+
+custom_http_client = AsyncClient(timeout=30)
+model = MistralModel(
+    'mistral-large-latest',
+    provider=MistralProvider(api_key='your-api-key', http_client=custom_http_client),
+)
 agent = Agent(model)
 ...
 ```
@@ -491,7 +579,7 @@ agent = Agent(model)
 To use [`CohereModel`][pydantic_ai.models.cohere.CohereModel], you need to either install [`pydantic-ai`](install.md), or install [`pydantic-ai-slim`](install.md#slim-install) with the `cohere` optional group:
 
 ```bash
-pip/uv-add 'pydantic-ai-slim[cohere]'
+pip/uv-add "pydantic-ai-slim[cohere]"
 ```
 
 ### Configuration
@@ -523,20 +611,39 @@ Or initialise the model directly with just the model name:
 from pydantic_ai import Agent
 from pydantic_ai.models.cohere import CohereModel
 
-model = CohereModel('command', api_key='your-api-key')
+model = CohereModel('command')
 agent = Agent(model)
 ...
 ```
 
-### `api_key` argument
+### `provider` argument
 
-If you don't want to or can't set the environment variable, you can pass it at runtime via the [`api_key` argument][pydantic_ai.models.cohere.CohereModel.__init__]:
+You can provide a custom [`Provider`][pydantic_ai.providers.Provider] via the [`provider` argument][pydantic_ai.models.cohere.CohereModel.__init__]:
 
-```python {title="cohere_model_api_key.py"}
+```python {title="cohere_model_provider.py"}
 from pydantic_ai import Agent
 from pydantic_ai.models.cohere import CohereModel
+from pydantic_ai.providers.cohere import CohereProvider
 
-model = CohereModel('command', api_key='your-api-key')
+model = CohereModel('command', provider=CohereProvider(api_key='your-api-key'))
+agent = Agent(model)
+...
+```
+
+You can also customize the `CohereProvider` with a custom `http_client`:
+
+```python {title="cohere_model_custom_provider.py"}
+from httpx import AsyncClient
+
+from pydantic_ai import Agent
+from pydantic_ai.models.cohere import CohereModel
+from pydantic_ai.providers.cohere import CohereProvider
+
+custom_http_client = AsyncClient(timeout=30)
+model = CohereModel(
+    'command',
+    provider=CohereProvider(api_key='your-api-key', http_client=custom_http_client),
+)
 agent = Agent(model)
 ...
 ```
@@ -548,7 +655,7 @@ agent = Agent(model)
 To use [`BedrockConverseModel`][pydantic_ai.models.bedrock.BedrockConverseModel], you need to either install [`pydantic-ai`](install.md), or install [`pydantic-ai-slim`](install.md#slim-install) with the `bedrock` optional group:
 
 ```bash
-pip/uv-add 'pydantic-ai-slim[bedrock]'
+pip/uv-add "pydantic-ai-slim[bedrock]"
 ```
 
 ### Configuration
@@ -559,12 +666,12 @@ To use [AWS Bedrock](https://aws.amazon.com/bedrock/), you'll need an AWS accoun
 
 ### Environment variables
 
-You can set your AWS credentials as environment variables:
+You can set your AWS credentials as environment variables ([among other options](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/configuration.html#using-environment-variables):
 
 ```bash
 export AWS_ACCESS_KEY_ID='your-access-key'
 export AWS_SECRET_ACCESS_KEY='your-secret-key'
-export AWS_REGION='us-east-1'  # or your preferred region
+export AWS_DEFAULT_REGION='us-east-1'  # or your preferred region
 ```
 
 You can then use [`BedrockConverseModel`][pydantic_ai.models.bedrock.BedrockConverseModel] by name:
@@ -763,6 +870,28 @@ Usage(requests=1, request_tokens=57, response_tokens=8, total_tokens=65, details
 1. The name of the model running on the remote server
 2. The url of the remote server
 
+### Azure AI Foundry
+
+If you want to use [Azure AI Foundry](https://ai.azure.com/) as your provider, you can do so by using the
+[`AzureProvider`][pydantic_ai.providers.azure.AzureProvider] class.
+
+```python {title="azure_provider_example.py"}
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.azure import AzureProvider
+
+model = OpenAIModel(
+    'gpt-4o',
+    provider=AzureProvider(
+        azure_endpoint='your-azure-endpoint',
+        api_version='your-api-version',
+        api_key='your-api-key',
+    ),
+)
+agent = Agent(model)
+...
+```
+
 ### OpenRouter
 
 To use [OpenRouter](https://openrouter.ai), first create an API key at [openrouter.ai/keys](https://openrouter.ai/keys).
@@ -777,7 +906,8 @@ from pydantic_ai.providers.openai import OpenAIProvider
 model = OpenAIModel(
     'anthropic/claude-3.5-sonnet',
     provider=OpenAIProvider(
-        base_url='https://openrouter.ai/api/v1', api_key='your-openrouter-api-key'
+        base_url='https://openrouter.ai/api/v1',
+        api_key='your-openrouter-api-key',
     ),
 )
 agent = Agent(model)
@@ -815,7 +945,50 @@ from pydantic_ai.providers.openai import OpenAIProvider
 model = OpenAIModel(
     'sonar-pro',
     provider=OpenAIProvider(
-        base_url='https://api.perplexity.ai', api_key='your-perplexity-api-key'
+        base_url='https://api.perplexity.ai',
+        api_key='your-perplexity-api-key',
+    ),
+)
+agent = Agent(model)
+...
+```
+
+### Fireworks AI
+
+Go to [Fireworks.AI](https://fireworks.ai/) and create an API key in your account settings.
+Once you have the API key, you can use it with the [`OpenAIProvider`][pydantic_ai.providers.openai.OpenAIProvider]:
+
+```python {title="fireworks_model_init.py"}
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+model = OpenAIModel(
+    'accounts/fireworks/models/qwq-32b',  # model library available at https://fireworks.ai/models
+    provider=OpenAIProvider(
+        base_url='https://api.fireworks.ai/inference/v1',
+        api_key='your-fireworks-api-key',
+    ),
+)
+agent = Agent(model)
+...
+```
+
+### Together AI
+
+Go to [Together.ai](https://www.together.ai/) and create an API key in your account settings.
+Once you have the API key, you can use it with the [`OpenAIProvider`][pydantic_ai.providers.openai.OpenAIProvider]:
+
+```python {title="together_model_init.py"}
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+model = OpenAIModel(
+    'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free',  # model library available at https://www.together.ai/models
+    provider=OpenAIProvider(
+        base_url='https://api.together.xyz/v1',
+        api_key='your-together-api-key',
     ),
 )
 agent = Agent(model)
@@ -849,7 +1022,7 @@ from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.openai import OpenAIModel
 
-openai_model = OpenAIModel('gpt-4o', api_key='not-valid')
+openai_model = OpenAIModel('gpt-4o')
 anthropic_model = AnthropicModel('claude-3-5-sonnet-latest')
 fallback_model = FallbackModel(openai_model, anthropic_model)
 
@@ -899,8 +1072,8 @@ contains all the exceptions encountered during the `run` execution.
     from pydantic_ai.models.fallback import FallbackModel
     from pydantic_ai.models.openai import OpenAIModel
 
-    openai_model = OpenAIModel('gpt-4o', api_key='not-valid')
-    anthropic_model = AnthropicModel('claude-3-5-sonnet-latest', api_key='not-valid')
+    openai_model = OpenAIModel('gpt-4o')
+    anthropic_model = AnthropicModel('claude-3-5-sonnet-latest')
     fallback_model = FallbackModel(openai_model, anthropic_model)
 
     agent = Agent(fallback_model)
@@ -932,8 +1105,8 @@ contains all the exceptions encountered during the `run` execution.
             print(exc)
 
 
-    openai_model = OpenAIModel('gpt-4o', api_key='not-valid')
-    anthropic_model = AnthropicModel('claude-3-5-sonnet-latest', api_key='not-valid')
+    openai_model = OpenAIModel('gpt-4o')
+    anthropic_model = AnthropicModel('claude-3-5-sonnet-latest')
     fallback_model = FallbackModel(openai_model, anthropic_model)
 
     agent = Agent(fallback_model)

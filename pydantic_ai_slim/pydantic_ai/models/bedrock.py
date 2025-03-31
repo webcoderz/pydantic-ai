@@ -15,6 +15,10 @@ from typing_extensions import ParamSpec, assert_never
 
 from pydantic_ai import _utils, result
 from pydantic_ai.messages import (
+    AudioUrl,
+    BinaryContent,
+    DocumentUrl,
+    ImageUrl,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -27,7 +31,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
+from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse, cached_async_http_client
 from pydantic_ai.providers import Provider, infer_provider
 from pydantic_ai.settings import ForcedFunctionToolChoice, ModelSettings
 from pydantic_ai.tools import ToolDefinition
@@ -38,9 +42,11 @@ if TYPE_CHECKING:
     from mypy_boto3_bedrock_runtime import BedrockRuntimeClient
     from mypy_boto3_bedrock_runtime.type_defs import (
         ContentBlockOutputTypeDef,
+        ContentBlockUnionTypeDef,
         ConverseResponseTypeDef,
         ConverseStreamMetadataEventTypeDef,
         ConverseStreamOutputTypeDef,
+        ImageBlockTypeDef,
         InferenceConfigurationTypeDef,
         MessageUnionTypeDef,
         ToolTypeDef,
@@ -106,6 +112,13 @@ P = ParamSpec('P')
 T = typing.TypeVar('T')
 
 
+class BedrockModelSettings(ModelSettings):
+    """Settings for Bedrock models.
+
+    ALL FIELDS MUST BE `bedrock_` PREFIXED SO YOU CAN MERGE THEM WITH OTHER MODELS.
+    """
+
+
 @dataclass(init=False)
 class BedrockConverseModel(Model):
     """A model that uses the Bedrock Converse API."""
@@ -113,7 +126,7 @@ class BedrockConverseModel(Model):
     client: BedrockRuntimeClient
 
     _model_name: BedrockModelName = field(repr=False)
-    _system: str | None = field(default='bedrock', repr=False)
+    _system: str = field(default='bedrock', repr=False)
 
     @property
     def model_name(self) -> str:
@@ -121,7 +134,7 @@ class BedrockConverseModel(Model):
         return self._model_name
 
     @property
-    def system(self) -> str | None:
+    def system(self) -> str:
         """The system / model provider, ex: openai."""
         return self._system
 
@@ -137,14 +150,15 @@ class BedrockConverseModel(Model):
             model_name: The name of the model to use.
             model_name: The name of the Bedrock model to use. List of model names available
                 [here](https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html).
-            provider: The provider to use. Defaults to `'bedrock'`.
+            provider: The provider to use for authentication and API access. Can be either the string
+                'bedrock' or an instance of `Provider[BaseClient]`. If not provided, a new provider will be
+                created using the other parameters.
         """
         self._model_name = model_name
 
         if isinstance(provider, str):
-            self.client = infer_provider(provider).client
-        else:
-            self.client = cast('BedrockRuntimeClient', provider.client)
+            provider = infer_provider(provider)
+        self.client = cast('BedrockRuntimeClient', provider.client)
 
     def _get_tools(self, model_request_parameters: ModelRequestParameters) -> list[ToolTypeDef]:
         tools = [self._map_tool_definition(r) for r in model_request_parameters.function_tools]
@@ -236,7 +250,7 @@ class BedrockConverseModel(Model):
         tools = self._get_tools(model_request_parameters)
         tool_config = self._get_tool_config(model_settings, model_request_parameters, tools)
 
-        system_prompt, bedrock_messages = self._map_message(messages)
+        system_prompt, bedrock_messages = await self._map_message(messages)
         inference_config = self._map_inference_config(model_settings)
 
         params = {
@@ -297,7 +311,7 @@ class BedrockConverseModel(Model):
 
         return inference_config
 
-    def _map_message(self, messages: list[ModelMessage]) -> tuple[str, list[MessageUnionTypeDef]]:
+    async def _map_message(self, messages: list[ModelMessage]) -> tuple[str, list[MessageUnionTypeDef]]:
         """Just maps a `pydantic_ai.Message` to the Bedrock `MessageUnionTypeDef`."""
         system_prompt: str = ''
         bedrock_messages: list[MessageUnionTypeDef] = []
@@ -307,10 +321,7 @@ class BedrockConverseModel(Model):
                     if isinstance(part, SystemPromptPart):
                         system_prompt += part.content
                     elif isinstance(part, UserPromptPart):
-                        if isinstance(part.content, str):
-                            bedrock_messages.append({'role': 'user', 'content': [{'text': part.content}]})
-                        else:
-                            raise NotImplementedError('User prompt can only be a string for now.')
+                        bedrock_messages.extend(await self._map_user_prompt(part))
                     elif isinstance(part, ToolReturnPart):
                         assert part.tool_call_id is not None
                         bedrock_messages.append(
@@ -354,21 +365,57 @@ class BedrockConverseModel(Model):
                         content.append({'text': item.content})
                     else:
                         assert isinstance(item, ToolCallPart)
-                        content.append(self._map_tool_call(item))  # FIXME: MISSING key
+                        content.append(self._map_tool_call(item))
                 bedrock_messages.append({'role': 'assistant', 'content': content})
             else:
                 assert_never(m)
         return system_prompt, bedrock_messages
 
     @staticmethod
+    async def _map_user_prompt(part: UserPromptPart) -> list[MessageUnionTypeDef]:
+        content: list[ContentBlockUnionTypeDef] = []
+        if isinstance(part.content, str):
+            content.append({'text': part.content})
+        else:
+            document_count = 0
+            for item in part.content:
+                if isinstance(item, str):
+                    content.append({'text': item})
+                elif isinstance(item, BinaryContent):
+                    format = item.format
+                    if item.is_document:
+                        document_count += 1
+                        name = f'Document {document_count}'
+                        assert format in ('pdf', 'txt', 'csv', 'doc', 'docx', 'xls', 'xlsx', 'html', 'md')
+                        content.append({'document': {'name': name, 'format': format, 'source': {'bytes': item.data}}})
+                    elif item.is_image:
+                        assert format in ('jpeg', 'png', 'gif', 'webp')
+                        content.append({'image': {'format': format, 'source': {'bytes': item.data}}})
+                    else:
+                        raise NotImplementedError('Binary content is not supported yet.')
+                elif isinstance(item, (ImageUrl, DocumentUrl)):
+                    response = await cached_async_http_client().get(item.url)
+                    response.raise_for_status()
+                    if item.kind == 'image-url':
+                        format = item.media_type.split('/')[1]
+                        assert format in ('jpeg', 'png', 'gif', 'webp'), f'Unsupported image format: {format}'
+                        image: ImageBlockTypeDef = {'format': format, 'source': {'bytes': response.content}}
+                        content.append({'image': image})
+                    elif item.kind == 'document-url':
+                        document_count += 1
+                        name = f'Document {document_count}'
+                        data = response.content
+                        content.append({'document': {'name': name, 'format': item.format, 'source': {'bytes': data}}})
+                elif isinstance(item, AudioUrl):  # pragma: no cover
+                    raise NotImplementedError('Audio is not supported yet.')
+                else:
+                    assert_never(item)
+        return [{'role': 'user', 'content': content}]
+
+    @staticmethod
     def _map_tool_call(t: ToolCallPart) -> ContentBlockOutputTypeDef:
-        assert t.tool_call_id is not None
         return {
-            'toolUse': {
-                'toolUseId': t.tool_call_id,
-                'name': t.tool_name,
-                'input': t.args_as_dict(),
-            }
+            'toolUse': {'toolUseId': _utils.guard_tool_call_id(t=t), 'name': t.tool_name, 'input': t.args_as_dict()}
         }
 
 

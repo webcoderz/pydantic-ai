@@ -3,12 +3,13 @@ from __future__ import annotations as _annotations
 import dataclasses
 import inspect
 from collections.abc import AsyncIterator, Awaitable, Iterator, Sequence
-from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager, contextmanager
 from copy import deepcopy
 from types import FrameType
-from typing import Any, Callable, ClassVar, Generic, cast, final, overload
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, cast, final, overload
 
 from opentelemetry.trace import NoOpTracer, use_span
+from pydantic.json_schema import GenerateJsonSchema
 from typing_extensions import TypeGuard, TypeVar, deprecated
 
 from pydantic_graph import End, Graph, GraphRun, GraphRunContext
@@ -31,6 +32,7 @@ from .settings import ModelSettings, merge_model_settings
 from .tools import (
     AgentDepsT,
     DocstringFormat,
+    GenerateToolJsonSchema,
     RunContext,
     Tool,
     ToolFuncContext,
@@ -46,6 +48,9 @@ EndStrategy = _agent_graph.EndStrategy
 CallToolsNode = _agent_graph.CallToolsNode
 ModelRequestNode = _agent_graph.ModelRequestNode
 UserPromptNode = _agent_graph.UserPromptNode
+
+if TYPE_CHECKING:
+    from pydantic_ai.mcp import MCPServer
 
 __all__ = (
     'Agent',
@@ -89,9 +94,11 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
     ```
     """
 
-    # we use dataclass fields in order to conveniently know what attributes are available
-    model: models.Model | models.KnownModelName | None
-    """The default model configured for this agent."""
+    model: models.Model | models.KnownModelName | str | None
+    """The default model configured for this agent.
+
+    We allow str here since the actual list of allowed models changes frequently.
+    """
 
     name: str | None
     """The name of the agent, used for logging.
@@ -129,6 +136,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         repr=False
     )
     _function_tools: dict[str, Tool[AgentDepsT]] = dataclasses.field(repr=False)
+    _mcp_servers: Sequence[MCPServer] = dataclasses.field(repr=False)
     _default_retries: int = dataclasses.field(repr=False)
     _max_result_retries: int = dataclasses.field(repr=False)
     _override_deps: _utils.Option[AgentDepsT] = dataclasses.field(default=None, repr=False)
@@ -136,7 +144,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
 
     def __init__(
         self,
-        model: models.Model | models.KnownModelName | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
         *,
         result_type: type[ResultDataT] = str,
         system_prompt: str | Sequence[str] = (),
@@ -148,6 +156,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         result_tool_description: str | None = None,
         result_retries: int | None = None,
         tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
+        mcp_servers: Sequence[MCPServer] = (),
         defer_model_check: bool = False,
         end_strategy: EndStrategy = 'early',
         instrument: InstrumentationSettings | bool | None = None,
@@ -156,7 +165,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
 
         Args:
             model: The default model to use for this agent, if not provide,
-                you must provide the model when calling it.
+                you must provide the model when calling it. We allow str here since the actual list of allowed models changes frequently.
             result_type: The type of the result data, used to validate the result data, defaults to `str`.
             system_prompt: Static system prompts to use for this agent, you can also register system
                 prompts via a function with [`system_prompt`][pydantic_ai.Agent.system_prompt].
@@ -173,6 +182,8 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
             result_retries: The maximum number of retries to allow for result validation, defaults to `retries`.
             tools: Tools to register with the agent, you can also register tools via the decorators
                 [`@agent.tool`][pydantic_ai.Agent.tool] and [`@agent.tool_plain`][pydantic_ai.Agent.tool_plain].
+            mcp_servers: MCP servers to register with the agent. You should register a [`MCPServer`][pydantic_ai.mcp.MCPServer]
+                for each server you want the agent to connect to.
             defer_model_check: by default, if you provide a [named][pydantic_ai.models.KnownModelName] model,
                 it's evaluated to create a [`Model`][pydantic_ai.models.Model] instance immediately,
                 which checks for the necessary environment variables. Set this to `false`
@@ -186,6 +197,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
                 If this isn't set, then the last value set by
                 [`Agent.instrument_all()`][pydantic_ai.Agent.instrument_all]
                 will be used, which defaults to False.
+                See the [Debugging and Monitoring guide](https://ai.pydantic.dev/logfire/) for more info.
         """
         if model is None or defer_model_check:
             self.model = model
@@ -202,19 +214,20 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
 
         self._result_tool_name = result_tool_name
         self._result_tool_description = result_tool_description
-        self._result_schema: _result.ResultSchema[ResultDataT] | None = _result.ResultSchema[result_type].build(
+        self._result_schema = _result.ResultSchema[result_type].build(
             result_type, result_tool_name, result_tool_description
         )
-        self._result_validators: list[_result.ResultValidator[AgentDepsT, ResultDataT]] = []
+        self._result_validators = []
 
         self._system_prompts = (system_prompt,) if isinstance(system_prompt, str) else tuple(system_prompt)
-        self._system_prompt_functions: list[_system_prompt.SystemPromptRunner[AgentDepsT]] = []
-        self._system_prompt_dynamic_functions: dict[str, _system_prompt.SystemPromptRunner[AgentDepsT]] = {}
+        self._system_prompt_functions = []
+        self._system_prompt_dynamic_functions = {}
 
-        self._function_tools: dict[str, Tool[AgentDepsT]] = {}
+        self._function_tools = {}
 
         self._default_retries = retries
         self._max_result_retries = result_retries if result_retries is not None else retries
+        self._mcp_servers = mcp_servers
         for tool in tools:
             if isinstance(tool, Tool):
                 self._register_tool(tool)
@@ -233,7 +246,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         *,
         result_type: None = None,
         message_history: list[_messages.ModelMessage] | None = None,
-        model: models.Model | models.KnownModelName | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
         deps: AgentDepsT = None,
         model_settings: ModelSettings | None = None,
         usage_limits: _usage.UsageLimits | None = None,
@@ -248,7 +261,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         *,
         result_type: type[RunResultDataT],
         message_history: list[_messages.ModelMessage] | None = None,
-        model: models.Model | models.KnownModelName | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
         deps: AgentDepsT = None,
         model_settings: ModelSettings | None = None,
         usage_limits: _usage.UsageLimits | None = None,
@@ -262,7 +275,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         *,
         result_type: type[RunResultDataT] | None = None,
         message_history: list[_messages.ModelMessage] | None = None,
-        model: models.Model | models.KnownModelName | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
         deps: AgentDepsT = None,
         model_settings: ModelSettings | None = None,
         usage_limits: _usage.UsageLimits | None = None,
@@ -316,8 +329,8 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
             async for _ in agent_run:
                 pass
 
-        assert (final_result := agent_run.result) is not None, 'The graph run did not finish properly'
-        return final_result
+        assert agent_run.result is not None, 'The graph run did not finish properly'
+        return agent_run.result
 
     @asynccontextmanager
     async def iter(
@@ -326,7 +339,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         *,
         result_type: type[RunResultDataT] | None = None,
         message_history: list[_messages.ModelMessage] | None = None,
-        model: models.Model | models.KnownModelName | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
         deps: AgentDepsT = None,
         model_settings: ModelSettings | None = None,
         usage_limits: _usage.UsageLimits | None = None,
@@ -435,7 +448,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         usage_limits = usage_limits or _usage.UsageLimits()
 
         if isinstance(model_used, InstrumentedModel):
-            tracer = model_used.options.tracer
+            tracer = model_used.settings.tracer
         else:
             tracer = NoOpTracer()
         agent_name = self.name or 'agent'
@@ -461,6 +474,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
             result_tools=self._result_schema.tool_defs() if self._result_schema else [],
             result_validators=result_validators,
             function_tools=self._function_tools,
+            mcp_servers=self._mcp_servers,
             run_span=run_span,
             tracer=tracer,
         )
@@ -475,8 +489,8 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
             start_node,
             state=state,
             deps=graph_deps,
-            infer_name=False,
             span=use_span(run_span, end_on_exit=True),
+            infer_name=False,
         ) as graph_run:
             yield AgentRun(graph_run)
 
@@ -486,7 +500,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         user_prompt: str | Sequence[_messages.UserContent],
         *,
         message_history: list[_messages.ModelMessage] | None = None,
-        model: models.Model | models.KnownModelName | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
         deps: AgentDepsT = None,
         model_settings: ModelSettings | None = None,
         usage_limits: _usage.UsageLimits | None = None,
@@ -501,7 +515,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         *,
         result_type: type[RunResultDataT] | None,
         message_history: list[_messages.ModelMessage] | None = None,
-        model: models.Model | models.KnownModelName | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
         deps: AgentDepsT = None,
         model_settings: ModelSettings | None = None,
         usage_limits: _usage.UsageLimits | None = None,
@@ -515,7 +529,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         *,
         result_type: type[RunResultDataT] | None = None,
         message_history: list[_messages.ModelMessage] | None = None,
-        model: models.Model | models.KnownModelName | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
         deps: AgentDepsT = None,
         model_settings: ModelSettings | None = None,
         usage_limits: _usage.UsageLimits | None = None,
@@ -576,7 +590,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         *,
         result_type: None = None,
         message_history: list[_messages.ModelMessage] | None = None,
-        model: models.Model | models.KnownModelName | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
         deps: AgentDepsT = None,
         model_settings: ModelSettings | None = None,
         usage_limits: _usage.UsageLimits | None = None,
@@ -591,7 +605,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         *,
         result_type: type[RunResultDataT],
         message_history: list[_messages.ModelMessage] | None = None,
-        model: models.Model | models.KnownModelName | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
         deps: AgentDepsT = None,
         model_settings: ModelSettings | None = None,
         usage_limits: _usage.UsageLimits | None = None,
@@ -606,7 +620,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         *,
         result_type: type[RunResultDataT] | None = None,
         message_history: list[_messages.ModelMessage] | None = None,
-        model: models.Model | models.KnownModelName | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
         deps: AgentDepsT = None,
         model_settings: ModelSettings | None = None,
         usage_limits: _usage.UsageLimits | None = None,
@@ -745,12 +759,12 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         self,
         *,
         deps: AgentDepsT | _utils.Unset = _utils.UNSET,
-        model: models.Model | models.KnownModelName | _utils.Unset = _utils.UNSET,
+        model: models.Model | models.KnownModelName | str | _utils.Unset = _utils.UNSET,
     ) -> Iterator[None]:
         """Context manager to temporarily override agent dependencies and model.
 
         This is particularly useful when testing.
-        You can find an example of this [here](../testing-evals.md#overriding-model-via-pytest-fixtures).
+        You can find an example of this [here](../testing.md#overriding-model-via-pytest-fixtures).
 
         Args:
             deps: The dependencies to use instead of the dependencies passed to the agent run.
@@ -762,11 +776,9 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         else:
             override_deps_before = _utils.UNSET
 
-        # noinspection PyTypeChecker
         if _utils.is_set(model):
             override_model_before = self._override_model
-            # noinspection PyTypeChecker
-            self._override_model = _utils.Some(models.infer_model(model))  # pyright: ignore[reportArgumentType]
+            self._override_model = _utils.Some(models.infer_model(model))
         else:
             override_model_before = _utils.UNSET
 
@@ -922,10 +934,12 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         self,
         /,
         *,
+        name: str | None = None,
         retries: int | None = None,
         prepare: ToolPrepareFunc[AgentDepsT] | None = None,
         docstring_format: DocstringFormat = 'auto',
         require_parameter_descriptions: bool = False,
+        schema_generator: type[GenerateJsonSchema] = GenerateToolJsonSchema,
     ) -> Callable[[ToolFuncContext[AgentDepsT, ToolParams]], ToolFuncContext[AgentDepsT, ToolParams]]: ...
 
     def tool(
@@ -933,10 +947,12 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         func: ToolFuncContext[AgentDepsT, ToolParams] | None = None,
         /,
         *,
+        name: str | None = None,
         retries: int | None = None,
         prepare: ToolPrepareFunc[AgentDepsT] | None = None,
         docstring_format: DocstringFormat = 'auto',
         require_parameter_descriptions: bool = False,
+        schema_generator: type[GenerateJsonSchema] = GenerateToolJsonSchema,
     ) -> Any:
         """Decorator to register a tool function which takes [`RunContext`][pydantic_ai.tools.RunContext] as its first argument.
 
@@ -969,6 +985,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
 
         Args:
             func: The tool function to register.
+            name: The name of the tool, defaults to the function name.
             retries: The number of retries to allow for this tool, defaults to the agent's default retries,
                 which defaults to 1.
             prepare: custom method to prepare the tool definition for each step, return `None` to omit this
@@ -977,6 +994,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
             docstring_format: The format of the docstring, see [`DocstringFormat`][pydantic_ai.tools.DocstringFormat].
                 Defaults to `'auto'`, such that the format is inferred from the structure of the docstring.
             require_parameter_descriptions: If True, raise an error if a parameter description is missing. Defaults to False.
+            schema_generator: The JSON schema generator class to use for this tool. Defaults to `GenerateToolJsonSchema`.
         """
         if func is None:
 
@@ -984,13 +1002,24 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
                 func_: ToolFuncContext[AgentDepsT, ToolParams],
             ) -> ToolFuncContext[AgentDepsT, ToolParams]:
                 # noinspection PyTypeChecker
-                self._register_function(func_, True, retries, prepare, docstring_format, require_parameter_descriptions)
+                self._register_function(
+                    func_,
+                    True,
+                    name,
+                    retries,
+                    prepare,
+                    docstring_format,
+                    require_parameter_descriptions,
+                    schema_generator,
+                )
                 return func_
 
             return tool_decorator
         else:
             # noinspection PyTypeChecker
-            self._register_function(func, True, retries, prepare, docstring_format, require_parameter_descriptions)
+            self._register_function(
+                func, True, name, retries, prepare, docstring_format, require_parameter_descriptions, schema_generator
+            )
             return func
 
     @overload
@@ -1001,10 +1030,12 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         self,
         /,
         *,
+        name: str | None = None,
         retries: int | None = None,
         prepare: ToolPrepareFunc[AgentDepsT] | None = None,
         docstring_format: DocstringFormat = 'auto',
         require_parameter_descriptions: bool = False,
+        schema_generator: type[GenerateJsonSchema] = GenerateToolJsonSchema,
     ) -> Callable[[ToolFuncPlain[ToolParams]], ToolFuncPlain[ToolParams]]: ...
 
     def tool_plain(
@@ -1012,10 +1043,12 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         func: ToolFuncPlain[ToolParams] | None = None,
         /,
         *,
+        name: str | None = None,
         retries: int | None = None,
         prepare: ToolPrepareFunc[AgentDepsT] | None = None,
         docstring_format: DocstringFormat = 'auto',
         require_parameter_descriptions: bool = False,
+        schema_generator: type[GenerateJsonSchema] = GenerateToolJsonSchema,
     ) -> Any:
         """Decorator to register a tool function which DOES NOT take `RunContext` as an argument.
 
@@ -1048,6 +1081,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
 
         Args:
             func: The tool function to register.
+            name: The name of the tool, defaults to the function name.
             retries: The number of retries to allow for this tool, defaults to the agent's default retries,
                 which defaults to 1.
             prepare: custom method to prepare the tool definition for each step, return `None` to omit this
@@ -1056,39 +1090,53 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
             docstring_format: The format of the docstring, see [`DocstringFormat`][pydantic_ai.tools.DocstringFormat].
                 Defaults to `'auto'`, such that the format is inferred from the structure of the docstring.
             require_parameter_descriptions: If True, raise an error if a parameter description is missing. Defaults to False.
+            schema_generator: The JSON schema generator class to use for this tool. Defaults to `GenerateToolJsonSchema`.
         """
         if func is None:
 
             def tool_decorator(func_: ToolFuncPlain[ToolParams]) -> ToolFuncPlain[ToolParams]:
                 # noinspection PyTypeChecker
                 self._register_function(
-                    func_, False, retries, prepare, docstring_format, require_parameter_descriptions
+                    func_,
+                    False,
+                    name,
+                    retries,
+                    prepare,
+                    docstring_format,
+                    require_parameter_descriptions,
+                    schema_generator,
                 )
                 return func_
 
             return tool_decorator
         else:
-            self._register_function(func, False, retries, prepare, docstring_format, require_parameter_descriptions)
+            self._register_function(
+                func, False, name, retries, prepare, docstring_format, require_parameter_descriptions, schema_generator
+            )
             return func
 
     def _register_function(
         self,
         func: ToolFuncEither[AgentDepsT, ToolParams],
         takes_ctx: bool,
+        name: str | None,
         retries: int | None,
         prepare: ToolPrepareFunc[AgentDepsT] | None,
         docstring_format: DocstringFormat,
         require_parameter_descriptions: bool,
+        schema_generator: type[GenerateJsonSchema],
     ) -> None:
         """Private utility to register a function as a tool."""
         retries_ = retries if retries is not None else self._default_retries
         tool = Tool[AgentDepsT](
             func,
             takes_ctx=takes_ctx,
+            name=name,
             max_retries=retries_,
             prepare=prepare,
             docstring_format=docstring_format,
             require_parameter_descriptions=require_parameter_descriptions,
+            schema_generator=schema_generator,
         )
         self._register_tool(tool)
 
@@ -1106,7 +1154,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
 
         self._function_tools[tool.name] = tool
 
-    def _get_model(self, model: models.Model | models.KnownModelName | None) -> models.Model:
+    def _get_model(self, model: models.Model | models.KnownModelName | str | None) -> models.Model:
         """Create a model configured for this agent.
 
         Args:
@@ -1120,7 +1168,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
             # we don't want `override()` to cover up errors from the model not being defined, hence this check
             if model is None and self.model is None:
                 raise exceptions.UserError(
-                    '`model` must be set either when creating the agent or when calling it. '
+                    '`model` must either be set on the agent or included when calling it. '
                     '(Even when `override(model=...)` is customizing the model that will actually be called)'
                 )
             model_ = some_model.value
@@ -1130,7 +1178,7 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
             # noinspection PyTypeChecker
             model_ = self.model = models.infer_model(self.model)
         else:
-            raise exceptions.UserError('`model` must be set either when creating the agent or when calling it.')
+            raise exceptions.UserError('`model` must either be set on the agent or included when calling it.')
 
         instrument = self.instrument
         if instrument is None:
@@ -1238,6 +1286,20 @@ class Agent(Generic[AgentDepsT, ResultDataT]):
         This method preserves the generic parameters while narrowing the type, unlike a direct call to `isinstance`.
         """
         return isinstance(node, End)
+
+    @asynccontextmanager
+    async def run_mcp_servers(self) -> AsyncIterator[None]:
+        """Run [`MCPServerStdio`s][pydantic_ai.mcp.MCPServerStdio] so they can be used by the agent.
+
+        Returns: a context manager to start and shutdown the servers.
+        """
+        exit_stack = AsyncExitStack()
+        try:
+            for mcp_server in self._mcp_servers:
+                await exit_stack.enter_async_context(mcp_server)
+            yield
+        finally:
+            await exit_stack.aclose()
 
 
 @dataclasses.dataclass(repr=False)

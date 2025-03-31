@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import httpx
 import pytest
 from _pytest.assertion.rewrite import AssertionRewritingHook
+from pytest_mock import MockerFixture
 from typing_extensions import TypeAlias
 from vcr import VCR
 
@@ -39,20 +40,9 @@ else:
 
     def IsNow(*args: Any, **kwargs: Any):
         # Increase the default value of `delta` to 10 to reduce test flakiness on overburdened machines
-        if 'delta' not in kwargs:
+        if 'delta' not in kwargs:  # pragma: no branch
             kwargs['delta'] = 10
         return _IsNow(*args, **kwargs)
-
-
-try:
-    from logfire.testing import CaptureLogfire
-except ImportError:
-    pass
-else:
-
-    @pytest.fixture(autouse=True)
-    def logfire_disable(capfire: CaptureLogfire):
-        pass
 
 
 class TestEnv:
@@ -164,7 +154,7 @@ def create_module(tmp_path: Path, request: pytest.FixtureRequest) -> Callable[[s
 
 
 @contextmanager
-def try_import() -> Iterator[Callable[[], bool]]:
+def try_import() -> Iterator[Callable[[], bool]]:  # pragma: no cover
     import_success = False
 
     def check_import() -> bool:
@@ -210,7 +200,18 @@ def vcr_config():
 @pytest.fixture(autouse=True)
 async def close_cached_httpx_client() -> AsyncIterator[None]:
     yield
-    await cached_async_http_client().aclose()
+    for provider in [
+        'openai',
+        'anthropic',
+        'azure',
+        'google-gla',
+        'google-vertex',
+        'groq',
+        'mistral',
+        'cohere',
+        'deepseek',
+    ]:
+        await cached_async_http_client(provider=provider).aclose()
 
 
 @pytest.fixture(scope='session')
@@ -231,6 +232,12 @@ def image_content(assets_path: Path) -> BinaryContent:
 
 
 @pytest.fixture(scope='session')
+def document_content(assets_path: Path) -> BinaryContent:
+    pdf_bytes = assets_path.joinpath('dummy.pdf').read_bytes()
+    return BinaryContent(data=pdf_bytes, media_type='application/pdf')
+
+
+@pytest.fixture(scope='session')
 def openai_api_key() -> str:
     return os.getenv('OPENAI_API_KEY', 'mock-api-key')
 
@@ -248,3 +255,25 @@ def groq_api_key() -> str:
 @pytest.fixture(scope='session')
 def anthropic_api_key() -> str:
     return os.getenv('ANTHROPIC_API_KEY', 'mock-api-key')
+
+
+@pytest.fixture(scope='session')
+def co_api_key() -> str:
+    return os.getenv('CO_API_KEY', 'mock-api-key')
+
+
+@pytest.fixture(scope='session')
+def mistral_api_key() -> str:
+    return os.getenv('MISTRAL_API_KEY', 'mock-api-key')
+
+
+@pytest.fixture
+def mock_snapshot_id(mocker: MockerFixture):
+    i = 0
+
+    def generate_snapshot_id(node_id: str) -> str:
+        nonlocal i
+        i += 1
+        return f'{node_id}:{i}'
+
+    return mocker.patch('pydantic_graph.nodes.generate_snapshot_id', side_effect=generate_snapshot_id)

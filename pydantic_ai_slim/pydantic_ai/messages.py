@@ -4,14 +4,15 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from mimetypes import guess_type
 from typing import Annotated, Any, Literal, Union, cast, overload
 
 import pydantic
 import pydantic_core
-from opentelemetry._events import Event
+from opentelemetry._events import Event  # pyright: ignore[reportPrivateImportUsage]
 from typing_extensions import TypeAlias
 
-from ._utils import now_utc as _now_utc
+from ._utils import generate_tool_call_id as _generate_tool_call_id, now_utc as _now_utc
 from .exceptions import UnexpectedModelBehavior
 
 
@@ -24,6 +25,9 @@ class SystemPromptPart:
 
     content: str
     """The content of the prompt."""
+
+    timestamp: datetime = field(default_factory=_now_utc)
+    """The timestamp of the prompt."""
 
     dynamic_ref: str | None = None
     """The ref of the dynamic system prompt function that generated this part.
@@ -83,9 +87,57 @@ class ImageUrl:
         else:
             raise ValueError(f'Unknown image file extension: {self.url}')
 
+    @property
+    def format(self) -> ImageFormat:
+        """The file format of the image.
+
+        The choice of supported formats were based on the Bedrock Converse API. Other APIs don't require to use a format.
+        """
+        return _image_format(self.media_type)
+
+
+@dataclass
+class DocumentUrl:
+    """The URL of the document."""
+
+    url: str
+    """The URL of the document."""
+
+    kind: Literal['document-url'] = 'document-url'
+    """Type identifier, this is available on all parts as a discriminator."""
+
+    @property
+    def media_type(self) -> str:
+        """Return the media type of the document, based on the url."""
+        type_, _ = guess_type(self.url)
+        if type_ is None:
+            raise RuntimeError(f'Unknown document file extension: {self.url}')
+        return type_
+
+    @property
+    def format(self) -> DocumentFormat:
+        """The file format of the document.
+
+        The choice of supported formats were based on the Bedrock Converse API. Other APIs don't require to use a format.
+        """
+        return _document_format(self.media_type)
+
 
 AudioMediaType: TypeAlias = Literal['audio/wav', 'audio/mpeg']
 ImageMediaType: TypeAlias = Literal['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+DocumentMediaType: TypeAlias = Literal[
+    'application/pdf',
+    'text/plain',
+    'text/csv',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'text/html',
+    'text/markdown',
+    'application/vnd.ms-excel',
+]
+AudioFormat: TypeAlias = Literal['wav', 'mp3']
+ImageFormat: TypeAlias = Literal['jpeg', 'png', 'gif', 'webp']
+DocumentFormat: TypeAlias = Literal['csv', 'doc', 'docx', 'html', 'md', 'pdf', 'txt', 'xls', 'xlsx']
 
 
 @dataclass
@@ -95,7 +147,7 @@ class BinaryContent:
     data: bytes
     """The binary data."""
 
-    media_type: AudioMediaType | ImageMediaType | str
+    media_type: AudioMediaType | ImageMediaType | DocumentMediaType | str
     """The media type of the binary data."""
 
     kind: Literal['binary'] = 'binary'
@@ -112,17 +164,69 @@ class BinaryContent:
         return self.media_type.startswith('image/')
 
     @property
-    def audio_format(self) -> Literal['mp3', 'wav']:
-        """Return the audio format given the media type."""
-        if self.media_type == 'audio/mpeg':
-            return 'mp3'
-        elif self.media_type == 'audio/wav':
-            return 'wav'
-        else:
-            raise ValueError(f'Unknown audio media type: {self.media_type}')
+    def is_document(self) -> bool:
+        """Return `True` if the media type is a document type."""
+        return self.media_type in {
+            'application/pdf',
+            'text/plain',
+            'text/csv',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'text/html',
+            'text/markdown',
+            'application/vnd.ms-excel',
+        }
+
+    @property
+    def format(self) -> str:
+        """The file format of the binary content."""
+        if self.is_audio:
+            if self.media_type == 'audio/mpeg':
+                return 'mp3'
+            elif self.media_type == 'audio/wav':
+                return 'wav'
+        elif self.is_image:
+            return _image_format(self.media_type)
+        elif self.is_document:
+            return _document_format(self.media_type)
+        raise ValueError(f'Unknown media type: {self.media_type}')
 
 
-UserContent: TypeAlias = 'str | ImageUrl | AudioUrl | BinaryContent'
+UserContent: TypeAlias = 'str | ImageUrl | AudioUrl | DocumentUrl | BinaryContent'
+
+
+def _document_format(media_type: str) -> DocumentFormat:
+    if media_type == 'application/pdf':
+        return 'pdf'
+    elif media_type == 'text/plain':
+        return 'txt'
+    elif media_type == 'text/csv':
+        return 'csv'
+    elif media_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+        return 'docx'
+    elif media_type == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
+        return 'xlsx'
+    elif media_type == 'text/html':
+        return 'html'
+    elif media_type == 'text/markdown':
+        return 'md'
+    elif media_type == 'application/vnd.ms-excel':
+        return 'xls'
+    else:
+        raise ValueError(f'Unknown document media type: {media_type}')
+
+
+def _image_format(media_type: str) -> ImageFormat:
+    if media_type == 'image/jpeg':
+        return 'jpeg'
+    elif media_type == 'image/png':
+        return 'png'
+    elif media_type == 'image/gif':
+        return 'gif'
+    elif media_type == 'image/webp':
+        return 'webp'
+    else:
+        raise ValueError(f'Unknown image media type: {media_type}')
 
 
 @dataclass
@@ -164,8 +268,8 @@ class ToolReturnPart:
     content: Any
     """The return value."""
 
-    tool_call_id: str | None = None
-    """Optional tool call identifier, this is used by some models including OpenAI."""
+    tool_call_id: str
+    """The tool call identifier, this is used by some models including OpenAI."""
 
     timestamp: datetime = field(default_factory=_now_utc)
     """The timestamp, when the tool returned."""
@@ -224,8 +328,11 @@ class RetryPromptPart:
     tool_name: str | None = None
     """The name of the tool that was called, if any."""
 
-    tool_call_id: str | None = None
-    """Optional tool call identifier, this is used by some models including OpenAI."""
+    tool_call_id: str = field(default_factory=_generate_tool_call_id)
+    """The tool call identifier, this is used by some models including OpenAI.
+
+    In case the tool call id is not provided by the model, PydanticAI will generate a random one.
+    """
 
     timestamp: datetime = field(default_factory=_now_utc)
     """The timestamp, when the retry was triggered."""
@@ -302,8 +409,11 @@ class ToolCallPart:
     This is stored either as a JSON string or a Python dictionary depending on how data was received.
     """
 
-    tool_call_id: str | None = None
-    """Optional tool call identifier, this is used by some models including OpenAI."""
+    tool_call_id: str = field(default_factory=_generate_tool_call_id)
+    """The tool call identifier, this is used by some models including OpenAI.
+
+    In case the tool call id is not provided by the model, PydanticAI will generate a random one.
+    """
 
     part_kind: Literal['tool-call'] = 'tool-call'
     """Part type identifier, this is available on all parts as a discriminator."""
@@ -395,7 +505,9 @@ class ModelResponse:
 ModelMessage = Annotated[Union[ModelRequest, ModelResponse], pydantic.Discriminator('kind')]
 """Any message sent to or returned by a model."""
 
-ModelMessagesTypeAdapter = pydantic.TypeAdapter(list[ModelMessage], config=pydantic.ConfigDict(defer_build=True))
+ModelMessagesTypeAdapter = pydantic.TypeAdapter(
+    list[ModelMessage], config=pydantic.ConfigDict(defer_build=True, ser_json_bytes='base64')
+)
 """Pydantic [`TypeAdapter`][pydantic.type_adapter.TypeAdapter] for (de)serializing messages."""
 
 
@@ -458,11 +570,7 @@ class ToolCallPartDelta:
         if self.tool_name_delta is None or self.args_delta is None:
             return None
 
-        return ToolCallPart(
-            self.tool_name_delta,
-            self.args_delta,
-            self.tool_call_id,
-        )
+        return ToolCallPart(self.tool_name_delta, self.args_delta, self.tool_call_id or _generate_tool_call_id())
 
     @overload
     def apply(self, part: ModelResponsePart) -> ToolCallPart: ...
@@ -514,20 +622,11 @@ class ToolCallPartDelta:
             delta = replace(delta, args_delta=updated_args_delta)
 
         if self.tool_call_id:
-            # Set the tool_call_id if it wasn't present, otherwise error if it has changed
-            if delta.tool_call_id is not None and delta.tool_call_id != self.tool_call_id:
-                raise UnexpectedModelBehavior(
-                    f'Cannot apply a new tool_call_id to a ToolCallPartDelta that already has one ({delta=}, {self=})'
-                )
             delta = replace(delta, tool_call_id=self.tool_call_id)
 
         # If we now have enough data to create a full ToolCallPart, do so
         if delta.tool_name_delta is not None and delta.args_delta is not None:
-            return ToolCallPart(
-                delta.tool_name_delta,
-                delta.args_delta,
-                delta.tool_call_id,
-            )
+            return ToolCallPart(delta.tool_name_delta, delta.args_delta, delta.tool_call_id or _generate_tool_call_id())
 
         return delta
 
@@ -550,11 +649,6 @@ class ToolCallPartDelta:
             part = replace(part, args=updated_dict)
 
         if self.tool_call_id:
-            # Replace the tool_call_id entirely if given
-            if part.tool_call_id is not None and part.tool_call_id != self.tool_call_id:
-                raise UnexpectedModelBehavior(
-                    f'Cannot apply a new tool_call_id to a ToolCallPartDelta that already has one ({part=}, {self=})'
-                )
             part = replace(part, tool_call_id=self.tool_call_id)
         return part
 

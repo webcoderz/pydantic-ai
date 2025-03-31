@@ -7,7 +7,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 from urllib.parse import urlparse
 
-from opentelemetry._events import Event, EventLogger, EventLoggerProvider, get_event_logger_provider
+from opentelemetry._events import (
+    Event,  # pyright: ignore[reportPrivateImportUsage]
+    EventLogger,  # pyright: ignore[reportPrivateImportUsage]
+    EventLoggerProvider,  # pyright: ignore[reportPrivateImportUsage]
+    get_event_logger_provider,  # pyright: ignore[reportPrivateImportUsage]
+)
 from opentelemetry.trace import Span, Tracer, TracerProvider, get_tracer_provider
 from opentelemetry.util.types import AttributeValue
 from pydantic import TypeAdapter
@@ -52,7 +57,9 @@ class InstrumentationSettings:
 
     - `Agent(instrument=...)`
     - [`Agent.instrument_all()`][pydantic_ai.agent.Agent.instrument_all]
-    - `InstrumentedModel`
+    - [`InstrumentedModel`][pydantic_ai.models.instrumented.InstrumentedModel]
+
+    See the [Debugging and Monitoring guide](https://ai.pydantic.dev/logfire/) for more info.
     """
 
     tracer: Tracer = field(repr=False)
@@ -88,11 +95,19 @@ class InstrumentationSettings:
         self.event_mode = event_mode
 
 
+GEN_AI_SYSTEM_ATTRIBUTE = 'gen_ai.system'
+GEN_AI_REQUEST_MODEL_ATTRIBUTE = 'gen_ai.request.model'
+
+
 @dataclass
 class InstrumentedModel(WrapperModel):
-    """Model which is instrumented with OpenTelemetry."""
+    """Model which wraps another model so that requests are instrumented with OpenTelemetry.
 
-    options: InstrumentationSettings
+    See the [Debugging and Monitoring guide](https://ai.pydantic.dev/logfire/) for more info.
+    """
+
+    settings: InstrumentationSettings
+    """Configuration for instrumenting requests."""
 
     def __init__(
         self,
@@ -100,7 +115,7 @@ class InstrumentedModel(WrapperModel):
         options: InstrumentationSettings | None = None,
     ) -> None:
         super().__init__(wrapped)
-        self.options = options or InstrumentationSettings()
+        self.settings = options or InstrumentationSettings()
 
     async def request(
         self,
@@ -108,7 +123,7 @@ class InstrumentedModel(WrapperModel):
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> tuple[ModelResponse, Usage]:
-        with self._instrument(messages, model_settings) as finish:
+        with self._instrument(messages, model_settings, model_request_parameters) as finish:
             response, usage = await super().request(messages, model_settings, model_request_parameters)
             finish(response, usage)
             return response, usage
@@ -120,7 +135,7 @@ class InstrumentedModel(WrapperModel):
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> AsyncIterator[StreamedResponse]:
-        with self._instrument(messages, model_settings) as finish:
+        with self._instrument(messages, model_settings, model_request_parameters) as finish:
             response_stream: StreamedResponse | None = None
             try:
                 async with super().request_stream(
@@ -136,36 +151,31 @@ class InstrumentedModel(WrapperModel):
         self,
         messages: list[ModelMessage],
         model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
     ) -> Iterator[Callable[[ModelResponse, Usage], None]]:
         operation = 'chat'
-        model_name = self.model_name
-        span_name = f'{operation} {model_name}'
-        system = getattr(self.wrapped, 'system', '') or self.wrapped.__class__.__name__.removesuffix('Model').lower()
-        system = {'google-gla': 'gemini', 'google-vertex': 'vertex_ai', 'mistral': 'mistral_ai'}.get(system, system)
+        span_name = f'{operation} {self.model_name}'
         # TODO Missing attributes:
         #  - error.type: unclear if we should do something here or just always rely on span exceptions
         #  - gen_ai.request.stop_sequences/top_k: model_settings doesn't include these
         attributes: dict[str, AttributeValue] = {
             'gen_ai.operation.name': operation,
-            'gen_ai.system': system,
-            'gen_ai.request.model': model_name,
+            **self.model_attributes(self.wrapped),
+            'model_request_parameters': json.dumps(InstrumentedModel.serialize_any(model_request_parameters)),
+            'logfire.json_schema': json.dumps(
+                {
+                    'type': 'object',
+                    'properties': {'model_request_parameters': {'type': 'object'}},
+                }
+            ),
         }
-        if base_url := self.wrapped.base_url:
-            try:
-                parsed = urlparse(base_url)
-                if parsed.hostname:
-                    attributes['server.address'] = parsed.hostname
-                if parsed.port:
-                    attributes['server.port'] = parsed.port
-            except Exception:  # pragma: no cover
-                pass
 
         if model_settings:
             for key in MODEL_SETTING_ATTRIBUTES:
                 if isinstance(value := model_settings.get(key), (float, int)):
                     attributes[f'gen_ai.request.{key}'] = value
 
-        with self.options.tracer.start_as_current_span(span_name, attributes=attributes) as span:
+        with self.settings.tracer.start_as_current_span(span_name, attributes=attributes) as span:
 
             def finish(response: ModelResponse, usage: Usage):
                 if not span.is_recording():
@@ -183,24 +193,25 @@ class InstrumentedModel(WrapperModel):
                             },
                         )
                     )
-                span.set_attributes(
-                    {
-                        # TODO finish_reason (https://github.com/open-telemetry/semantic-conventions/issues/1277), id
-                        #  https://github.com/pydantic/pydantic-ai/issues/886
-                        'gen_ai.response.model': response.model_name or model_name,
-                        **usage.opentelemetry_attributes(),
+                new_attributes: dict[str, AttributeValue] = usage.opentelemetry_attributes()  # type: ignore
+                attributes.update(getattr(span, 'attributes', {}))
+                request_model = attributes[GEN_AI_REQUEST_MODEL_ATTRIBUTE]
+                new_attributes['gen_ai.response.model'] = response.model_name or request_model
+                span.set_attributes(new_attributes)
+                span.update_name(f'{operation} {request_model}')
+                for event in events:
+                    event.attributes = {
+                        GEN_AI_SYSTEM_ATTRIBUTE: attributes[GEN_AI_SYSTEM_ATTRIBUTE],
+                        **(event.attributes or {}),
                     }
-                )
-                self._emit_events(system, span, events)
+                self._emit_events(span, events)
 
             yield finish
 
-    def _emit_events(self, system: str, span: Span, events: list[Event]) -> None:
-        for event in events:
-            event.attributes = {'gen_ai.system': system, **(event.attributes or {})}
-        if self.options.event_mode == 'logs':
+    def _emit_events(self, span: Span, events: list[Event]) -> None:
+        if self.settings.event_mode == 'logs':
             for event in events:
-                self.options.event_logger.emit(event)
+                self.settings.event_logger.emit(event)
         else:
             attr_name = 'events'
             span.set_attributes(
@@ -209,11 +220,33 @@ class InstrumentedModel(WrapperModel):
                     'logfire.json_schema': json.dumps(
                         {
                             'type': 'object',
-                            'properties': {attr_name: {'type': 'array'}},
+                            'properties': {
+                                attr_name: {'type': 'array'},
+                                'model_request_parameters': {'type': 'object'},
+                            },
                         }
                     ),
                 }
             )
+
+    @staticmethod
+    def model_attributes(model: Model):
+        attributes: dict[str, AttributeValue] = {
+            GEN_AI_SYSTEM_ATTRIBUTE: model.system,
+            GEN_AI_REQUEST_MODEL_ATTRIBUTE: model.model_name,
+        }
+        if base_url := model.base_url:
+            try:
+                parsed = urlparse(base_url)
+            except Exception:  # pragma: no cover
+                pass
+            else:
+                if parsed.hostname:
+                    attributes['server.address'] = parsed.hostname
+                if parsed.port:
+                    attributes['server.port'] = parsed.port
+
+        return attributes
 
     @staticmethod
     def event_to_dict(event: Event) -> dict[str, Any]:

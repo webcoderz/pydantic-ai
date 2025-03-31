@@ -65,5 +65,21 @@ def infer_provider(provider: str) -> Provider[Any]:
         from .bedrock import BedrockProvider
 
         return BedrockProvider()
+    elif provider == 'groq':
+        from .groq import GroqProvider
+
+        return GroqProvider()
+    elif provider == 'anthropic':
+        from .anthropic import AnthropicProvider
+
+        return AnthropicProvider()
+    elif provider == 'mistral':
+        from .mistral import MistralProvider
+
+        return MistralProvider()
+    elif provider == 'cohere':
+        from .cohere import CohereProvider
+
+        return CohereProvider()
     else:  # pragma: no cover
         raise ValueError(f'Unknown provider: {provider}')

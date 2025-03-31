@@ -8,13 +8,13 @@ from datetime import datetime, timezone
 from itertools import chain
 from typing import Literal, Union, cast, overload
 
-from httpx import AsyncClient as AsyncHTTPClient
 from typing_extensions import assert_never
 
 from .. import ModelHTTPError, UnexpectedModelBehavior, _utils, usage
 from .._utils import guard_tool_call_id as _guard_tool_call_id
 from ..messages import (
     BinaryContent,
+    DocumentUrl,
     ImageUrl,
     ModelMessage,
     ModelRequest,
@@ -28,15 +28,10 @@ from ..messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from ..providers import Provider, infer_provider
 from ..settings import ForcedFunctionToolChoice, ModelSettings
 from ..tools import ToolDefinition
-from . import (
-    Model,
-    ModelRequestParameters,
-    StreamedResponse,
-    cached_async_http_client,
-    check_allow_model_requests,
-)
+from . import Model, ModelRequestParameters, StreamedResponse, check_allow_model_requests
 
 try:
     from groq import NOT_GIVEN, APIStatusError, AsyncGroq, AsyncStream
@@ -46,36 +41,54 @@ try:
 except ImportError as _import_error:
     raise ImportError(
         'Please install `groq` to use the Groq model, '
-        "you can use the `groq` optional group — `pip install 'pydantic-ai-slim[groq]'`"
+        'you can use the `groq` optional group — `pip install "pydantic-ai-slim[groq]"`'
     ) from _import_error
 
-LatestGroqModelNames = Literal[
+ProductionGroqModelNames = Literal[
+    'distil-whisper-large-v3-en',
+    'gemma2-9b-it',
     'llama-3.3-70b-versatile',
-    'llama-3.3-70b-specdec',
     'llama-3.1-8b-instant',
+    'llama-guard-3-8b',
+    'llama3-70b-8192',
+    'llama3-8b-8192',
+    'whisper-large-v3',
+    'whisper-large-v3-turbo',
+]
+"""Production Groq models from <https://console.groq.com/docs/models#production-models>."""
+
+PreviewGroqModelNames = Literal[
+    'playai-tts',
+    'playai-tts-arabic',
+    'qwen-qwq-32b',
+    'mistral-saba-24b',
+    'qwen-2.5-coder-32b',
+    'qwen-2.5-32b',
+    'deepseek-r1-distill-qwen-32b',
+    'deepseek-r1-distill-llama-70b',
+    'llama-3.3-70b-specdec',
     'llama-3.2-1b-preview',
     'llama-3.2-3b-preview',
     'llama-3.2-11b-vision-preview',
     'llama-3.2-90b-vision-preview',
-    'llama3-70b-8192',
-    'llama3-8b-8192',
-    'mixtral-8x7b-32768',
-    'gemma2-9b-it',
 ]
-"""Latest Groq models."""
+"""Preview Groq models from <https://console.groq.com/docs/models#preview-models>."""
 
-GroqModelName = Union[str, LatestGroqModelNames]
-"""
-Possible Groq model names.
+GroqModelName = Union[str, ProductionGroqModelNames, PreviewGroqModelNames]
+"""Possible Groq model names.
 
-Since Groq supports a variety of date-stamped models, we explicitly list the latest models but
-allow any name in the type hints.
-See [the Groq docs](https://console.groq.com/docs/models) for a full list.
+Since Groq supports a variety of models and the list changes frequencly, we explicitly list the named models as of 2025-03-31
+but allow any name in the type hints.
+
+See <https://console.groq.com/docs/models> for an up to date date list of models and more details.
 """
 
 
 class GroqModelSettings(ModelSettings):
-    """Settings used for a Groq model request."""
+    """Settings used for a Groq model request.
+
+    ALL FIELDS MUST BE `groq_` PREFIXED SO YOU CAN MERGE THEM WITH OTHER MODELS.
+    """
 
     # This class is a placeholder for any future groq-specific settings
 
@@ -92,37 +105,23 @@ class GroqModel(Model):
     client: AsyncGroq = field(repr=False)
 
     _model_name: GroqModelName = field(repr=False)
-    _system: str | None = field(default='groq', repr=False)
+    _system: str = field(default='groq', repr=False)
 
-    def __init__(
-        self,
-        model_name: GroqModelName,
-        *,
-        api_key: str | None = None,
-        groq_client: AsyncGroq | None = None,
-        http_client: AsyncHTTPClient | None = None,
-    ):
+    def __init__(self, model_name: GroqModelName, *, provider: Literal['groq'] | Provider[AsyncGroq] = 'groq'):
         """Initialize a Groq model.
 
         Args:
             model_name: The name of the Groq model to use. List of model names available
                 [here](https://console.groq.com/docs/models).
-            api_key: The API key to use for authentication, if not provided, the `GROQ_API_KEY` environment variable
-                will be used if available.
-            groq_client: An existing
-                [`AsyncGroq`](https://github.com/groq/groq-python?tab=readme-ov-file#async-usage)
-                client to use, if provided, `api_key` and `http_client` must be `None`.
-            http_client: An existing `httpx.AsyncClient` to use for making HTTP requests.
+            provider: The provider to use for authentication and API access. Can be either the string
+                'groq' or an instance of `Provider[AsyncGroq]`. If not provided, a new provider will be
+                created using the other parameters.
         """
         self._model_name = model_name
-        if groq_client is not None:
-            assert http_client is None, 'Cannot provide both `groq_client` and `http_client`'
-            assert api_key is None, 'Cannot provide both `groq_client` and `api_key`'
-            self.client = groq_client
-        elif http_client is not None:
-            self.client = AsyncGroq(api_key=api_key, http_client=http_client)
-        else:
-            self.client = AsyncGroq(api_key=api_key, http_client=cached_async_http_client())
+
+        if isinstance(provider, str):
+            provider = infer_provider(provider)
+        self.client = provider.client
 
     @property
     def base_url(self) -> str:
@@ -160,7 +159,7 @@ class GroqModel(Model):
         return self._model_name
 
     @property
-    def system(self) -> str | None:
+    def system(self) -> str:
         """The system / model provider."""
         return self._system
 
@@ -297,7 +296,7 @@ class GroqModel(Model):
     @staticmethod
     def _map_tool_call(t: ToolCallPart) -> chat.ChatCompletionMessageToolCallParam:
         return chat.ChatCompletionMessageToolCallParam(
-            id=_guard_tool_call_id(t=t, model_source='Groq'),
+            id=_guard_tool_call_id(t=t),
             type='function',
             function={'name': t.tool_name, 'arguments': t.args_as_json_str()},
         )
@@ -323,7 +322,7 @@ class GroqModel(Model):
             elif isinstance(part, ToolReturnPart):
                 yield chat.ChatCompletionToolMessageParam(
                     role='tool',
-                    tool_call_id=_guard_tool_call_id(t=part, model_source='Groq'),
+                    tool_call_id=_guard_tool_call_id(t=part),
                     content=part.model_response_str(),
                 )
             elif isinstance(part, RetryPromptPart):
@@ -332,7 +331,7 @@ class GroqModel(Model):
                 else:
                     yield chat.ChatCompletionToolMessageParam(
                         role='tool',
-                        tool_call_id=_guard_tool_call_id(t=part, model_source='Groq'),
+                        tool_call_id=_guard_tool_call_id(t=part),
                         content=part.model_response(),
                     )
 
@@ -356,8 +355,11 @@ class GroqModel(Model):
                         content.append(chat.ChatCompletionContentPartImageParam(image_url=image_url, type='image_url'))
                     else:
                         raise RuntimeError('Only images are supported for binary content in Groq.')
+                elif isinstance(item, DocumentUrl):  # pragma: no cover
+                    raise RuntimeError('DocumentUrl is not supported in Groq.')
                 else:  # pragma: no cover
                     raise RuntimeError(f'Unsupported content type: {type(item)}')
+
         return chat.ChatCompletionUserMessageParam(role='user', content=content)
 
 

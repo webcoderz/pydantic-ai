@@ -1,6 +1,6 @@
-"""Tests of pydantic-ai actually connecting to OpenAI and Gemini models.
+"""Tests of pydantic-ai actually making request to live vendor model APIs.
 
-WARNING: running these tests will consume your OpenAI and Gemini credits.
+WARNING: running these tests will make use of the relevant API tokens (and cost money).
 """
 
 import os
@@ -50,14 +50,16 @@ def vertexai(http_client: httpx.AsyncClient, tmp_path: Path) -> Model:
 
 def groq(http_client: httpx.AsyncClient, _tmp_path: Path) -> Model:
     from pydantic_ai.models.groq import GroqModel
+    from pydantic_ai.providers.groq import GroqProvider
 
-    return GroqModel('llama-3.3-70b-versatile', http_client=http_client)
+    return GroqModel('llama-3.3-70b-versatile', provider=GroqProvider(http_client=http_client))
 
 
 def anthropic(http_client: httpx.AsyncClient, _tmp_path: Path) -> Model:
     from pydantic_ai.models.anthropic import AnthropicModel
+    from pydantic_ai.providers.anthropic import AnthropicProvider
 
-    return AnthropicModel('claude-3-5-sonnet-latest', http_client=http_client)
+    return AnthropicModel('claude-3-5-sonnet-latest', provider=AnthropicProvider(http_client=http_client))
 
 
 def ollama(http_client: httpx.AsyncClient, _tmp_path: Path) -> Model:
@@ -71,14 +73,16 @@ def ollama(http_client: httpx.AsyncClient, _tmp_path: Path) -> Model:
 
 def mistral(http_client: httpx.AsyncClient, _tmp_path: Path) -> Model:
     from pydantic_ai.models.mistral import MistralModel
+    from pydantic_ai.providers.mistral import MistralProvider
 
-    return MistralModel('mistral-small-latest', http_client=http_client)
+    return MistralModel('mistral-small-latest', provider=MistralProvider(http_client=http_client))
 
 
 def cohere(http_client: httpx.AsyncClient, _tmp_path: Path) -> Model:
     from pydantic_ai.models.cohere import CohereModel
+    from pydantic_ai.providers.cohere import CohereProvider
 
-    return CohereModel('command-r7b-12-2024', http_client=http_client)
+    return CohereModel('command-r7b-12-2024', provider=CohereProvider(http_client=http_client))
 
 
 params = [

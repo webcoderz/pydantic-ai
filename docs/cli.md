@@ -13,7 +13,7 @@ To use the CLI, you need to either install [`pydantic-ai`](install.md), or insta
 [`pydantic-ai-slim`](install.md#slim-install) with the `cli` optional group:
 
 ```bash
-pip/uv-add 'pydantic-ai[cli]'
+pip/uv-add "pydantic-ai[cli]"
 ```
 
 To enable command-line argument autocompletion, run:
@@ -36,7 +36,7 @@ export OPENAI_API_KEY='your-api-key-here'
 Then simply run:
 
 ```bash
-$ pai
+pai
 ```
 
 This will start an interactive session where you can chat with the AI model. Special commands available in interactive mode:
@@ -51,4 +51,12 @@ You can specify which model to use with the `--model` flag:
 
 ```bash
 $ pai --model=openai:gpt-4 "What's the capital of France?"
+```
+
+### Usage with `uvx`
+
+If you have [uv](https://docs.astral.sh/uv/) installed, the quickest way to run the CLI is with `uvx`:
+
+```bash
+uvx --from pydantic-ai pai
 ```

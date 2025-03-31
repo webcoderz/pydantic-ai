@@ -1,15 +1,13 @@
 from __future__ import annotations as _annotations
 
 import base64
-import os
 from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal, Union, cast, overload
 
-from httpx import AsyncClient as AsyncHTTPClient
-from typing_extensions import assert_never, deprecated
+from typing_extensions import assert_never
 
 from pydantic_ai.providers import Provider, infer_provider
 
@@ -18,6 +16,7 @@ from .._utils import guard_tool_call_id as _guard_tool_call_id
 from ..messages import (
     AudioUrl,
     BinaryContent,
+    DocumentUrl,
     ImageUrl,
     ModelMessage,
     ModelRequest,
@@ -57,7 +56,7 @@ try:
 except ImportError as _import_error:
     raise ImportError(
         'Please install `openai` to use the OpenAI model, '
-        "you can use the `openai` optional group — `pip install 'pydantic-ai-slim[openai]'`"
+        'you can use the `openai` optional group — `pip install "pydantic-ai-slim[openai]"`'
     ) from _import_error
 
 OpenAIModelName = Union[str, ChatModel]
@@ -75,14 +74,23 @@ allows this model to be used more easily with other model types (ie, Ollama, Dee
 OpenAISystemPromptRole = Literal['system', 'developer', 'user']
 
 
-class OpenAIModelSettings(ModelSettings):
-    """Settings used for an OpenAI model request."""
+class OpenAIModelSettings(ModelSettings, total=False):
+    """Settings used for an OpenAI model request.
+
+    ALL FIELDS MUST BE `openai_` PREFIXED SO YOU CAN MERGE THEM WITH OTHER MODELS.
+    """
 
     openai_reasoning_effort: chat.ChatCompletionReasoningEffort
     """
     Constrains effort on reasoning for [reasoning models](https://platform.openai.com/docs/guides/reasoning).
     Currently supported values are `low`, `medium`, and `high`. Reducing reasoning effort can
     result in faster responses and fewer tokens used on reasoning in a response.
+    """
+
+    openai_user: str
+    """A unique identifier representing the end-user, which can help OpenAI monitor and detect abuse.
+
+    See [OpenAI's safety best practices](https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids) for more details.
     """
 
 
@@ -99,44 +107,14 @@ class OpenAIModel(Model):
     system_prompt_role: OpenAISystemPromptRole | None = field(default=None)
 
     _model_name: OpenAIModelName = field(repr=False)
-    _system: str | None = field(repr=False)
-
-    @overload
-    def __init__(
-        self,
-        model_name: OpenAIModelName,
-        *,
-        provider: Literal['openai', 'deepseek'] | Provider[AsyncOpenAI] = 'openai',
-        system_prompt_role: OpenAISystemPromptRole | None = None,
-        system: str | None = 'openai',
-    ) -> None: ...
-
-    @deprecated('Use the `provider` parameter instead of `base_url`, `api_key`, `openai_client` and `http_client`.')
-    @overload
-    def __init__(
-        self,
-        model_name: OpenAIModelName,
-        *,
-        provider: None = None,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        openai_client: AsyncOpenAI | None = None,
-        http_client: AsyncHTTPClient | None = None,
-        system_prompt_role: OpenAISystemPromptRole | None = None,
-        system: str | None = 'openai',
-    ) -> None: ...
+    _system: str = field(default='openai', repr=False)
 
     def __init__(
         self,
         model_name: OpenAIModelName,
         *,
-        provider: Literal['openai', 'deepseek'] | Provider[AsyncOpenAI] | None = None,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        openai_client: AsyncOpenAI | None = None,
-        http_client: AsyncHTTPClient | None = None,
+        provider: Literal['openai', 'deepseek', 'azure'] | Provider[AsyncOpenAI] = 'openai',
         system_prompt_role: OpenAISystemPromptRole | None = None,
-        system: str | None = 'openai',
     ):
         """Initialize an OpenAI model.
 
@@ -145,48 +123,14 @@ class OpenAIModel(Model):
                 [here](https://github.com/openai/openai-python/blob/v1.54.3/src/openai/types/chat_model.py#L7)
                 (Unfortunately, despite being ask to do so, OpenAI do not provide `.inv` files for their API).
             provider: The provider to use. Defaults to `'openai'`.
-            base_url: The base url for the OpenAI requests. If not provided, the `OPENAI_BASE_URL` environment variable
-                will be used if available. Otherwise, defaults to OpenAI's base url.
-            api_key: The API key to use for authentication, if not provided, the `OPENAI_API_KEY` environment variable
-                will be used if available.
-            openai_client: An existing
-                [`AsyncOpenAI`](https://github.com/openai/openai-python?tab=readme-ov-file#async-usage)
-                client to use. If provided, `base_url`, `api_key`, and `http_client` must be `None`.
-            http_client: An existing `httpx.AsyncClient` to use for making HTTP requests.
             system_prompt_role: The role to use for the system prompt message. If not provided, defaults to `'system'`.
                 In the future, this may be inferred from the model name.
-            system: The model provider used, defaults to `openai`. This is for observability purposes, you must
-                customize the `base_url` and `api_key` to use a different provider.
         """
         self._model_name = model_name
-
-        if provider is not None:
-            if isinstance(provider, str):
-                self.client = infer_provider(provider).client
-            else:
-                self.client = provider.client
-        else:  # pragma: no cover
-            # This is a workaround for the OpenAI client requiring an API key, whilst locally served,
-            # openai compatible models do not always need an API key, but a placeholder (non-empty) key is required.
-            if (
-                api_key is None
-                and 'OPENAI_API_KEY' not in os.environ
-                and base_url is not None
-                and openai_client is None
-            ):
-                api_key = 'api-key-not-set'
-
-            if openai_client is not None:
-                assert http_client is None, 'Cannot provide both `openai_client` and `http_client`'
-                assert base_url is None, 'Cannot provide both `openai_client` and `base_url`'
-                assert api_key is None, 'Cannot provide both `openai_client` and `api_key`'
-                self.client = openai_client
-            elif http_client is not None:
-                self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, http_client=http_client)
-            else:
-                self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, http_client=cached_async_http_client())
+        if isinstance(provider, str):
+            provider = infer_provider(provider)
+        self.client = provider.client
         self.system_prompt_role = system_prompt_role
-        self._system = system
 
     @property
     def base_url(self) -> str:
@@ -224,7 +168,7 @@ class OpenAIModel(Model):
         return self._model_name
 
     @property
-    def system(self) -> str | None:
+    def system(self) -> str:
         """The system / model provider."""
         return self._system
 
@@ -273,7 +217,7 @@ class OpenAIModel(Model):
                 tool_choice=tool_choice or NOT_GIVEN,
                 stream=stream,
                 stream_options={'include_usage': True} if stream else NOT_GIVEN,
-                max_tokens=model_settings.get('max_tokens', NOT_GIVEN),
+                max_completion_tokens=model_settings.get('max_tokens', NOT_GIVEN),
                 temperature=model_settings.get('temperature', NOT_GIVEN),
                 top_p=model_settings.get('top_p', NOT_GIVEN),
                 timeout=model_settings.get('timeout', NOT_GIVEN),
@@ -282,6 +226,7 @@ class OpenAIModel(Model):
                 frequency_penalty=model_settings.get('frequency_penalty', NOT_GIVEN),
                 logit_bias=model_settings.get('logit_bias', NOT_GIVEN),
                 reasoning_effort=model_settings.get('openai_reasoning_effort', NOT_GIVEN),
+                user=model_settings.get('openai_user', NOT_GIVEN),
             )
         except APIStatusError as e:
             if (status_code := e.status_code) >= 400:
@@ -368,7 +313,7 @@ class OpenAIModel(Model):
     @staticmethod
     def _map_tool_call(t: ToolCallPart) -> chat.ChatCompletionMessageToolCallParam:
         return chat.ChatCompletionMessageToolCallParam(
-            id=_guard_tool_call_id(t=t, model_source='OpenAI'),
+            id=_guard_tool_call_id(t=t),
             type='function',
             function={'name': t.tool_name, 'arguments': t.args_as_json_str()},
         )
@@ -398,7 +343,7 @@ class OpenAIModel(Model):
             elif isinstance(part, ToolReturnPart):
                 yield chat.ChatCompletionToolMessageParam(
                     role='tool',
-                    tool_call_id=_guard_tool_call_id(t=part, model_source='OpenAI'),
+                    tool_call_id=_guard_tool_call_id(t=part),
                     content=part.model_response_str(),
                 )
             elif isinstance(part, RetryPromptPart):
@@ -407,7 +352,7 @@ class OpenAIModel(Model):
                 else:
                     yield chat.ChatCompletionToolMessageParam(
                         role='tool',
-                        tool_call_id=_guard_tool_call_id(t=part, model_source='OpenAI'),
+                        tool_call_id=_guard_tool_call_id(t=part),
                         content=part.model_response(),
                     )
             else:
@@ -432,7 +377,8 @@ class OpenAIModel(Model):
                         image_url = ImageURL(url=f'data:{item.media_type};base64,{base64_encoded}')
                         content.append(ChatCompletionContentPartImageParam(image_url=image_url, type='image_url'))
                     elif item.is_audio:
-                        audio = InputAudio(data=base64_encoded, format=item.audio_format)
+                        assert item.format in ('wav', 'mp3')
+                        audio = InputAudio(data=base64_encoded, format=item.format)
                         content.append(ChatCompletionContentPartInputAudioParam(input_audio=audio, type='input_audio'))
                     else:  # pragma: no cover
                         raise RuntimeError(f'Unsupported binary content type: {item.media_type}')
@@ -443,6 +389,25 @@ class OpenAIModel(Model):
                     base64_encoded = base64.b64encode(response.content).decode('utf-8')
                     audio = InputAudio(data=base64_encoded, format=response.headers.get('content-type'))
                     content.append(ChatCompletionContentPartInputAudioParam(input_audio=audio, type='input_audio'))
+                elif isinstance(item, DocumentUrl):  # pragma: no cover
+                    raise NotImplementedError('DocumentUrl is not supported for OpenAI')
+                    # The following implementation should have worked, but it seems we have the following error:
+                    # pydantic_ai.exceptions.ModelHTTPError: status_code: 400, model_name: gpt-4o, body:
+                    # {
+                    #   'message': "Unknown parameter: 'messages[1].content[1].file.data'.",
+                    #   'type': 'invalid_request_error',
+                    #   'param': 'messages[1].content[1].file.data',
+                    #   'code': 'unknown_parameter'
+                    # }
+                    #
+                    # client = cached_async_http_client()
+                    # response = await client.get(item.url)
+                    # response.raise_for_status()
+                    # base64_encoded = base64.b64encode(response.content).decode('utf-8')
+                    # media_type = response.headers.get('content-type').split(';')[0]
+                    # file_data = f'data:{media_type};base64,{base64_encoded}'
+                    # file = File(file={'file_data': file_data, 'file_name': item.url, 'file_id': item.url}, type='file')
+                    # content.append(file)
                 else:
                     assert_never(item)
         return chat.ChatCompletionUserMessageParam(role='user', content=content)
