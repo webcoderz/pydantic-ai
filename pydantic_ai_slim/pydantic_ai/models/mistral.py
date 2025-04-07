@@ -283,13 +283,13 @@ class MistralModel(Model):
             return None
         elif tool_choice == 'auto' and not model_request_parameters.allow_text_result:
             return 'required'
-        elif tool_choice in ('auto', 'none', 'required'):
-            return tool_choice
         elif isinstance(tool_choice, ForcedFunctionToolChoice):
             raise UserError(
                 'Mistral does not support forcing a specific tool. '
                 'Please choose a different value for the `tool_choice` parameter in the model settings.'
             )
+        elif tool_choice in ('auto', 'none', 'required'):
+            return tool_choice
         else:
             assert_never(tool_choice)
 

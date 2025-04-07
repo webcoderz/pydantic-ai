@@ -106,6 +106,7 @@ KnownModelName = TypeAliasType(
         'google-gla:gemini-2.0-flash',
         'google-gla:gemini-2.0-flash-lite-preview-02-05',
         'google-gla:gemini-2.0-pro-exp-02-05',
+        'google-gla:gemini-2.5-pro-exp-03-25',
         'google-vertex:gemini-1.0-pro',
         'google-vertex:gemini-1.5-flash',
         'google-vertex:gemini-1.5-flash-8b',
@@ -116,6 +117,7 @@ KnownModelName = TypeAliasType(
         'google-vertex:gemini-2.0-flash',
         'google-vertex:gemini-2.0-flash-lite-preview-02-05',
         'google-vertex:gemini-2.0-pro-exp-02-05',
+        'google-vertex:gemini-2.5-pro-exp-03-25',
         'gpt-3.5-turbo',
         'gpt-3.5-turbo-0125',
         'gpt-3.5-turbo-0301',
@@ -271,6 +273,15 @@ class Model(ABC):
         # yield is required to make this a generator for type checking
         # noinspection PyUnreachableCode
         yield  # pragma: no cover
+
+    def customize_request_parameters(self, model_request_parameters: ModelRequestParameters) -> ModelRequestParameters:
+        """Customize the request parameters for the model.
+
+        This method can be overridden by subclasses to modify the request parameters before sending them to the model.
+        In particular, this method can be used to make modifications to the generated tool JSON schemas if necessary
+        for vendor/model-specific reasons.
+        """
+        return model_request_parameters
 
     @property
     @abstractmethod

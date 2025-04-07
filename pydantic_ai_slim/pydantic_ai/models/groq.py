@@ -196,10 +196,10 @@ class GroqModel(Model):
             return 'required'
         if tool_choice == 'auto':
             return None
-        elif tool_choice in ('none', 'required'):
-            return tool_choice
         elif isinstance(tool_choice, ForcedFunctionToolChoice):
             return {'type': 'function', 'function': {'name': tool_choice.name}}
+        elif tool_choice in ('none', 'required'):
+            return tool_choice
         else:
             assert_never(tool_choice)
 

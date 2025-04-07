@@ -6,6 +6,7 @@ import json
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from datetime import timezone
+from typing import Annotated
 
 import httpx
 import pytest
@@ -60,9 +61,10 @@ async def test_model_simple(allow_model_requests: None):
     assert m.model_name == 'gemini-1.5-flash'
     assert 'x-goog-api-key' in m.client.headers
 
-    arc = ModelRequestParameters(function_tools=[], allow_text_result=True, result_tools=[])
-    tools = m._get_tools(arc)
-    tool_config = m._get_tool_config(GeminiModelSettings(gemini_safety_settings=[]), arc, tools)
+    mrp = ModelRequestParameters(function_tools=[], allow_text_result=True, result_tools=[])
+    mrp = m.customize_request_parameters(mrp)
+    tools = m._get_tools(mrp)
+    tool_config = m._get_tool_config(GeminiModelSettings(gemini_safety_settings=[]), mrp, tools)
     assert tools is None
     assert tool_config is None
 
@@ -92,9 +94,10 @@ async def test_model_tools(allow_model_requests: None):
         {'type': 'object', 'title': 'Result', 'properties': {'spam': {'type': 'number'}}, 'required': ['spam']},
     )
 
-    arc = ModelRequestParameters(function_tools=tools, allow_text_result=True, result_tools=[result_tool])
-    tools = m._get_tools(arc)
-    tool_config = m._get_tool_config(GeminiModelSettings(gemini_safety_settings=[]), arc, tools)
+    mrp = ModelRequestParameters(function_tools=tools, allow_text_result=True, result_tools=[result_tool])
+    mrp = m.customize_request_parameters(mrp)
+    tools = m._get_tools(mrp)
+    tool_config = m._get_tool_config(GeminiModelSettings(gemini_safety_settings=[]), mrp, tools)
     assert tools == snapshot(
         _GeminiTools(
             function_declarations=[
@@ -133,9 +136,10 @@ async def test_require_response_tool(allow_model_requests: None):
         'This is the tool for the final Result',
         {'type': 'object', 'title': 'Result', 'properties': {'spam': {'type': 'number'}}},
     )
-    arc = ModelRequestParameters(function_tools=[], allow_text_result=False, result_tools=[result_tool])
-    tools = m._get_tools(arc)
-    tool_config = m._get_tool_config(GeminiModelSettings(gemini_safety_settings=[]), arc, tools)
+    mrp = ModelRequestParameters(function_tools=[], allow_text_result=False, result_tools=[result_tool])
+    mrp = m.customize_request_parameters(mrp)
+    tools = m._get_tools(mrp)
+    tool_config = m._get_tool_config(GeminiModelSettings(gemini_safety_settings=[]), mrp, tools)
     assert tools == snapshot(
         _GeminiTools(
             function_declarations=[
@@ -188,9 +192,9 @@ async def test_json_def_replaced(allow_model_requests: None):
         'This is the tool for the final Result',
         json_schema,
     )
-    assert m._get_tools(
-        ModelRequestParameters(function_tools=[], allow_text_result=True, result_tools=[result_tool])
-    ) == snapshot(
+    mrp = ModelRequestParameters(function_tools=[], allow_text_result=True, result_tools=[result_tool])
+    mrp = m.customize_request_parameters(mrp)
+    assert m._get_tools(mrp) == snapshot(
         _GeminiTools(
             function_declarations=[
                 _GeminiFunction(
@@ -235,9 +239,9 @@ async def test_json_def_replaced_any_of(allow_model_requests: None):
         'This is the tool for the final Result',
         json_schema,
     )
-    assert m._get_tools(
-        ModelRequestParameters(function_tools=[], allow_text_result=True, result_tools=[result_tool])
-    ) == snapshot(
+    mrp = ModelRequestParameters(function_tools=[], allow_text_result=True, result_tools=[result_tool])
+    mrp = m.customize_request_parameters(mrp)
+    assert m._get_tools(mrp) == snapshot(
         _GeminiTools(
             function_declarations=[
                 _GeminiFunction(
@@ -299,7 +303,9 @@ async def test_json_def_recursive(allow_model_requests: None):
         json_schema,
     )
     with pytest.raises(UserError, match=r'Recursive `\$ref`s in JSON Schema are not supported by Gemini'):
-        m._get_tools(ModelRequestParameters(function_tools=[], allow_text_result=True, result_tools=[result_tool]))
+        mrp = ModelRequestParameters(function_tools=[], allow_text_result=True, result_tools=[result_tool])
+        mrp = m.customize_request_parameters(mrp)
+        m._get_tools(mrp)
 
 
 async def test_json_def_date(allow_model_requests: None):
@@ -330,9 +336,9 @@ async def test_json_def_date(allow_model_requests: None):
         'This is the tool for the final Result',
         json_schema,
     )
-    assert m._get_tools(
-        ModelRequestParameters(function_tools=[], allow_text_result=True, result_tools=[result_tool])
-    ) == snapshot(
+    mrp = ModelRequestParameters(function_tools=[], allow_text_result=True, result_tools=[result_tool])
+    mrp = m.customize_request_parameters(mrp)
+    assert m._get_tools(mrp) == snapshot(
         _GeminiTools(
             function_declarations=[
                 _GeminiFunction(
@@ -980,3 +986,19 @@ async def test_document_url_input(allow_model_requests: None, gemini_api_key: st
 
     result = await agent.run(['What is the main content on this document?', document_url])
     assert result.data == snapshot('The main content of this document is that it is a **dummy PDF file**.')
+
+
+@pytest.mark.vcr()
+async def test_gemini_drop_exclusive_maximum(allow_model_requests: None, gemini_api_key: str) -> None:
+    m = GeminiModel('gemini-2.0-flash', provider=GoogleGLAProvider(api_key=gemini_api_key))
+    agent = Agent(m)
+
+    @agent.tool_plain
+    async def get_chinese_zodiac(age: Annotated[int, Field(gt=18)]) -> str:
+        return 'Dragon'
+
+    result = await agent.run('I want to know my chinese zodiac. I am 20 years old.')
+    assert result.data == snapshot('Your Chinese zodiac is Dragon.\n')
+
+    result = await agent.run('I want to know my chinese zodiac. I am 17 years old.')
+    assert result.data == snapshot('I am sorry, I cannot fulfill this request. The age needs to be greater than 18.\n')

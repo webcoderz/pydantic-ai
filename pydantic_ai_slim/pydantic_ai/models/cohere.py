@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from itertools import chain
 from typing import Literal, Union, cast
 
-from cohere import TextAssistantMessageContentItem
 from typing_extensions import assert_never
 
 from pydantic_ai.exceptions import UserError
@@ -36,6 +35,7 @@ try:
         ChatMessageV2,
         ChatResponse,
         SystemChatMessageV2,
+        TextAssistantMessageContentItem,
         ToolCallV2,
         ToolCallV2Function,
         ToolChatMessageV2,
@@ -117,7 +117,7 @@ class CohereModel(Model):
                 'cohere' or an instance of `Provider[AsyncClientV2]`. If not provided, a new provider will be
                 created using the other parameters.
         """
-        self._model_name: CohereModelName = model_name
+        self._model_name = model_name
 
         if isinstance(provider, str):
             provider = infer_provider(provider)
@@ -238,13 +238,13 @@ class CohereModel(Model):
             return 'REQUIRED'
         elif tool_choice == 'auto':
             return None
-        elif tool_choice in ('none', 'required'):
-            return tool_choice.upper()
         elif isinstance(tool_choice, ForcedFunctionToolChoice):
             raise UserError(
                 'Cohere does not support forcing a specific tool. '
                 'Please choose a different value for the `tool_choice` parameter in the model settings.'
             )
+        elif tool_choice in ('none', 'required'):
+            return tool_choice.upper()
         else:
             assert_never(tool_choice)
 
