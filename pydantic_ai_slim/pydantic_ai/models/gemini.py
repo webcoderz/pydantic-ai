@@ -34,6 +34,7 @@ from ..messages import (
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
+    VideoUrl,
 )
 from ..settings import ForcedFunctionToolChoice, ModelSettings
 from ..tools import ToolDefinition
@@ -58,6 +59,7 @@ LatestGeminiModelNames = Literal[
     'gemini-2.0-flash-lite-preview-02-05',
     'gemini-2.0-pro-exp-02-05',
     'gemini-2.5-pro-exp-03-25',
+    'gemini-2.5-pro-preview-03-25',
 ]
 """Latest Gemini models."""
 
@@ -158,8 +160,8 @@ class GeminiModel(Model):
 
         return ModelRequestParameters(
             function_tools=[_customize_tool_def(tool) for tool in model_request_parameters.function_tools],
-            allow_text_result=model_request_parameters.allow_text_result,
-            result_tools=[_customize_tool_def(tool) for tool in model_request_parameters.result_tools],
+            allow_text_output=model_request_parameters.allow_text_output,
+            output_tools=[_customize_tool_def(tool) for tool in model_request_parameters.output_tools],
         )
 
     @property
@@ -174,8 +176,8 @@ class GeminiModel(Model):
 
     def _get_tools(self, model_request_parameters: ModelRequestParameters) -> _GeminiTools | None:
         tools = [_function_from_abstract_tool(t) for t in model_request_parameters.function_tools]
-        if model_request_parameters.result_tools:
-            tools += [_function_from_abstract_tool(t) for t in model_request_parameters.result_tools]
+        if model_request_parameters.output_tools:
+            tools += [_function_from_abstract_tool(t) for t in model_request_parameters.output_tools]
         return _GeminiTools(function_declarations=tools) if tools else None
 
     @staticmethod
@@ -195,7 +197,7 @@ class GeminiModel(Model):
         """
         tool_choice = model_settings.get('tool_choice', 'auto')
 
-        if tool_choice == 'auto' and tools and not model_request_parameters.allow_text_result:
+        if tool_choice == 'auto' and tools and not model_request_parameters.allow_text_output:
             return {'function_calling_config': {'mode': 'ANY'}}
         elif tool_choice == 'auto':
             return None
@@ -355,6 +357,8 @@ class GeminiModel(Model):
                         inline_data={'data': base64.b64encode(response.content).decode('utf-8'), 'mime_type': mime_type}
                     )
                     content.append(inline_data)
+                elif isinstance(item, VideoUrl):  # pragma: no cover
+                    raise NotImplementedError('VideoUrl is not supported for Gemini.')
                 else:
                     assert_never(item)
         return content
@@ -526,6 +530,7 @@ class _GeminiGenerationConfig(TypedDict, total=False):
     top_p: float
     presence_penalty: float
     frequency_penalty: float
+    stop_sequences: list[str]
 
 
 class _GeminiContent(TypedDict):

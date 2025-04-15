@@ -31,7 +31,14 @@ from ..messages import (
 from ..providers import Provider, infer_provider
 from ..settings import ForcedFunctionToolChoice, ModelSettings
 from ..tools import ToolDefinition
-from . import Model, ModelRequestParameters, StreamedResponse, cached_async_http_client, check_allow_model_requests
+from . import (
+    Model,
+    ModelRequestParameters,
+    StreamedResponse,
+    cached_async_http_client,
+    check_allow_model_requests,
+    get_user_agent,
+)
 
 try:
     from anthropic import NOT_GIVEN, APIStatusError, AsyncAnthropic, AsyncStream
@@ -214,10 +221,12 @@ class AnthropicModel(Model):
                 tools=tools or NOT_GIVEN,
                 tool_choice=tool_choice or NOT_GIVEN,
                 stream=stream,
+                stop_sequences=model_settings.get('stop_sequences', NOT_GIVEN),
                 temperature=model_settings.get('temperature', NOT_GIVEN),
                 top_p=model_settings.get('top_p', NOT_GIVEN),
                 timeout=model_settings.get('timeout', NOT_GIVEN),
                 metadata=model_settings.get('anthropic_metadata', NOT_GIVEN),
+                extra_headers={'User-Agent': get_user_agent()},
             )
         except APIStatusError as e:
             if (status_code := e.status_code) >= 400:
@@ -256,8 +265,8 @@ class AnthropicModel(Model):
 
     def _get_tools(self, model_request_parameters: ModelRequestParameters) -> list[ToolParam]:
         tools = [self._map_tool_definition(r) for r in model_request_parameters.function_tools]
-        if model_request_parameters.result_tools:
-            tools += [self._map_tool_definition(r) for r in model_request_parameters.result_tools]
+        if model_request_parameters.output_tools:
+            tools += [self._map_tool_definition(r) for r in model_request_parameters.output_tools]
         return tools
 
     @staticmethod
@@ -273,7 +282,7 @@ class AnthropicModel(Model):
         tool_choice = model_settings.get('tool_choice', 'auto')
         disable_parallel_tool_use = not model_settings.get('parallel_tool_calls', True)
 
-        if tool_choice == 'auto' and tools and not model_request_parameters.allow_text_result:
+        if tool_choice == 'auto' and tools and not model_request_parameters.allow_text_output:
             return {'type': 'any', 'disable_parallel_tool_use': disable_parallel_tool_use}
         elif tool_choice == 'required':
             return {'type': 'any', 'disable_parallel_tool_use': disable_parallel_tool_use}

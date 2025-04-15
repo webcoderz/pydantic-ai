@@ -133,6 +133,19 @@ class ModelSettings(TypedDict, total=False):
     * Groq
     """
 
+    stop_sequences: list[str]
+    """Sequences that will cause the model to stop generating.
+
+    Supported by:
+
+    * OpenAI
+    * Anthropic
+    * Bedrock
+    * Mistral
+    * Groq
+    * Cohere
+    """
+
     tool_choice: Literal['none', 'auto', 'required'] | ForcedFunctionToolChoice
     """Decide the model's behavior regarding tool use.
 

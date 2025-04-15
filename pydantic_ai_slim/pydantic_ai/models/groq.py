@@ -31,7 +31,7 @@ from ..messages import (
 from ..providers import Provider, infer_provider
 from ..settings import ForcedFunctionToolChoice, ModelSettings
 from ..tools import ToolDefinition
-from . import Model, ModelRequestParameters, StreamedResponse, check_allow_model_requests
+from . import Model, ModelRequestParameters, StreamedResponse, check_allow_model_requests, get_user_agent
 
 try:
     from groq import NOT_GIVEN, APIStatusError, AsyncGroq, AsyncStream
@@ -192,7 +192,7 @@ class GroqModel(Model):
         """Determine the `tool_choice` setting for the model."""
         tool_choice = model_settings.get('tool_choice', 'auto')
 
-        if tool_choice == 'auto' and tools and not model_request_parameters.allow_text_result:
+        if tool_choice == 'auto' and tools and not model_request_parameters.allow_text_output:
             return 'required'
         if tool_choice == 'auto':
             return None
@@ -222,6 +222,7 @@ class GroqModel(Model):
                 parallel_tool_calls=model_settings.get('parallel_tool_calls', NOT_GIVEN),
                 tools=tools or NOT_GIVEN,
                 tool_choice=tool_choice or NOT_GIVEN,
+                stop=model_settings.get('stop_sequences', NOT_GIVEN),
                 stream=stream,
                 max_tokens=model_settings.get('max_tokens', NOT_GIVEN),
                 temperature=model_settings.get('temperature', NOT_GIVEN),
@@ -231,6 +232,7 @@ class GroqModel(Model):
                 presence_penalty=model_settings.get('presence_penalty', NOT_GIVEN),
                 frequency_penalty=model_settings.get('frequency_penalty', NOT_GIVEN),
                 logit_bias=model_settings.get('logit_bias', NOT_GIVEN),
+                extra_headers={'User-Agent': get_user_agent()},
             )
         except APIStatusError as e:
             if (status_code := e.status_code) >= 400:
@@ -264,8 +266,8 @@ class GroqModel(Model):
 
     def _get_tools(self, model_request_parameters: ModelRequestParameters) -> list[chat.ChatCompletionToolParam]:
         tools = [self._map_tool_definition(r) for r in model_request_parameters.function_tools]
-        if model_request_parameters.result_tools:
-            tools += [self._map_tool_definition(r) for r in model_request_parameters.result_tools]
+        if model_request_parameters.output_tools:
+            tools += [self._map_tool_definition(r) for r in model_request_parameters.output_tools]
         return tools
 
     def _map_message(self, message: ModelMessage) -> Iterable[chat.ChatCompletionMessageParam]:
