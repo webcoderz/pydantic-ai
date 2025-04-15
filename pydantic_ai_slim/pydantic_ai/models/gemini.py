@@ -242,7 +242,7 @@ class GeminiModel(Model):
                 generation_config['presence_penalty'] = presence_penalty
             if (frequency_penalty := model_settings.get('frequency_penalty')) is not None:
                 generation_config['frequency_penalty'] = frequency_penalty
-            if (gemini_safety_settings := model_settings.get('gemini_safety_settings')) != []:
+            if gemini_safety_settings := model_settings.get('gemini_safety_settings'):
                 request_data['safety_settings'] = gemini_safety_settings
         if generation_config:
             request_data['generation_config'] = generation_config
